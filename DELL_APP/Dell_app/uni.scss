@@ -1,0 +1,59 @@
+/**
+ * 数控电源 App - 全局 SCSS 变量
+ * 深色科技风主题
+ */
+
+/* 颜色系统 */
+$bg-primary: #0f0f23;
+$bg-secondary: #1a1a2e;
+$bg-card: #1a1a3e;
+$bg-card-hover: #16213e;
+
+$border-color: #2a2a5e;
+$border-light: #3a3a6e;
+
+$text-primary: #e0e0e0;
+$text-secondary: #888;
+$text-muted: #555;
+
+/* 主题色 */
+$color-voltage: #4fc3f7;
+$color-current: #ff8a65;
+$color-power: #ffd54f;
+$color-success: #00e676;
+$color-danger: #ff5252;
+$color-warning: #ffd740;
+
+/* 渐变 */
+$gradient-card: linear-gradient(135deg, #1a1a3e, #16213e);
+$gradient-voltage: linear-gradient(90deg, #4fc3f7, #0288d1);
+$gradient-current: linear-gradient(90deg, #ff8a65, #d84315);
+$gradient-btn: linear-gradient(135deg, #4fc3f7, #0288d1);
+
+/* 间距 */
+$spacing-xs: 8rpx;
+$spacing-sm: 16rpx;
+$spacing-md: 24rpx;
+$spacing-lg: 30rpx;
+$spacing-xl: 40rpx;
+
+/* 圆角 */
+$radius-sm: 12rpx;
+$radius-md: 16rpx;
+$radius-lg: 20rpx;
+$radius-round: 40rpx;
+
+/* 字体大小 */
+$font-xs: 20rpx;
+$font-sm: 22rpx;
+$font-md: 24rpx;
+$font-lg: 26rpx;
+$font-xl: 28rpx;
+$font-2xl: 32rpx;
+$font-3xl: 36rpx;
+$font-4xl: 64rpx;
+
+/* 阴影 */
+$shadow-glow-success: 0 0 12rpx rgba(0, 230, 118, 0.3);
+$shadow-glow-voltage: 0 0 12rpx rgba(79, 195, 247, 0.3);
+$shadow-glow-current: 0 0 12rpx rgba(255, 138, 101, 0.3);

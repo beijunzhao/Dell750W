@@ -1,0 +1,8 @@
+# Dell/Delta 750W PSU Controller - SDK Config Defaults
+# ESP-IDF v6.0.1
+
+# Enable Bluetooth
+CONFIG_BT_ENABLED=y
+
+# Use NimBLE as BLE host stack
+CONFIG_BT_NIMBLE_ENABLED=y
