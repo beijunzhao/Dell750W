@@ -148,11 +148,23 @@
 
 			bleService.onData((data) => {
 				// 更新设备信息
-				if (data.MFR_ID) this.deviceInfo.mfr_id = data.MFR_ID
+				if (data.MFR_ID) {
+					// 解析厂商 ID：台达电源常见标识
+					const id = data.MFR_ID.toUpperCase()
+					if (id.includes('DELTA') || id.includes('DPS') || id.includes('台达')) {
+						this.deviceInfo.mfr_id = '台达 (Delta)'
+					} else {
+						this.deviceInfo.mfr_id = data.MFR_ID
+					}
+				}
 				if (data.MFR_MODEL) this.deviceInfo.mfr_model = data.MFR_MODEL
 				if (data.MFR_REVISION) this.deviceInfo.mfr_revision = data.MFR_REVISION
 				if (data.MFR_LOCATION) this.deviceInfo.mfr_location = data.MFR_LOCATION
-				if (data.MFR_DATE) this.deviceInfo.mfr_date = data.MFR_DATE
+				if (data.MFR_DATE) {
+					// 解析生产日期：PMBus 格式为 YYWW（年+周），如 "15100"=15年第100周
+					// 台达电源使用 5 位格式：YY + WWW（3位周数）
+					this.deviceInfo.mfr_date = this._parseMfrDate(data.MFR_DATE)
+				}
 				if (data.MFR_SERIAL) this.deviceInfo.mfr_serial = data.MFR_SERIAL
 				if (data.pmbus_revision !== undefined) {
 					const rev = data.pmbus_revision
@@ -178,6 +190,28 @@
 			}
 		},
 		methods: {
+
+			/**
+			 * 解析 PMBus 生产日期格式 (YYWWW) 为年月
+			 * 台达电源使用 5 位格式：前 2 位年份 + 后 3 位周数
+			 * 例如 "15100" → 2015 年第 100 周 → 约 2015-12
+			 * @param {string} dateStr PMBus 原始日期字符串
+			 * @returns {string} 格式化后的年月字符串
+			 */
+			_parseMfrDate(dateStr) {
+				if (!dateStr) return '--'
+				// 尝试匹配 YYWWW 格式（5位数字）
+				const match = dateStr.trim().match(/^(\d{2})(\d{2,3})$/)
+				if (!match) return dateStr  // 无法解析则返回原始值
+
+				const year = 2000 + parseInt(match[1])
+				const week = parseInt(match[2])
+				// 将周数估算为月份：week / 52 * 12，四舍五入
+				let month = Math.round(week / 52 * 12)
+				if (month < 1) month = 1
+				if (month > 12) month = 12
+				return `${year}-${String(month).padStart(2, '0')}`
+			},
 
 			/** 自动请求设备信息（静默模式，不显示 loading） */
 			_requestInfo() {
