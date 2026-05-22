@@ -130,7 +130,9 @@
 					mfr_date: '',
 					mfr_serial: '',
 					pmbus_revision: ''
-				}
+				},
+				/** 防抖定时器：防止 _requestInfo() 被频繁调用 */
+				_infoDebounceTimer: null
 			}
 		},
 		onLoad() {
@@ -139,8 +141,9 @@
 			bleService.onStatus((status) => {
 				this.statusText = status
 				this.connected = bleService.connected
-				// 连接后自动获取设备信息
-				if (bleService.connected) {
+				// 只在真正"已连接"状态时请求设备信息
+				// 过滤掉"蓝牙就绪"、"正在扫描..."、"连接成功，发现服务..."等中间状态
+				if (bleService.connected && status === '已连接') {
 					this._requestInfo()
 				}
 			})
@@ -168,7 +171,7 @@
 			// 同步连接状态（连接状态变化由 ble-service.js 全局监听处理）
 			this.connected = bleService.connected
 			this.statusText = bleService.connected ? '已连接' : '未连接'
-			// 如果已连接，自动请求设备信息
+			// 如果已连接，自动请求设备信息（带防抖）
 			if (this.connected) {
 				this._requestInfo()
 			}
@@ -177,9 +180,16 @@
 			// 每次页面显示时同步连接状态
 			this.connected = bleService.connected
 			this.statusText = bleService.connected ? '已连接' : '未连接'
-			// 如果已连接且还没有设备信息，自动请求
+			// 如果已连接且还没有设备信息，自动请求（带防抖）
 			if (this.connected && !this.deviceInfo.mfr_id) {
 				this._requestInfo()
+			}
+		},
+		onUnload() {
+			// 页面卸载时清除防抖定时器
+			if (this._infoDebounceTimer) {
+				clearTimeout(this._infoDebounceTimer)
+				this._infoDebounceTimer = null
 			}
 		},
 		methods: {
@@ -229,16 +239,32 @@
 				return `${year}-${String(month).padStart(2, '0')}`
 			},
 
-			/** 自动请求设备信息（静默模式，不显示 loading） */
+			/**
+			 * 自动请求设备信息（静默模式，不显示 loading）
+			 * 带 3 秒防抖：短时间内多次调用只发送一次请求
+			 */
 			_requestInfo() {
 				if (!this.connected) return
-				bleService.getInfo().catch(err => {
-					console.error('[Settings] 获取设备信息失败:', err)
-				})
+				// 清除之前的防抖定时器
+				if (this._infoDebounceTimer) {
+					clearTimeout(this._infoDebounceTimer)
+				}
+				// 设置新的防抖定时器：3 秒内只执行最后一次
+				this._infoDebounceTimer = setTimeout(() => {
+					this._infoDebounceTimer = null
+					bleService.getInfo().catch(err => {
+						console.error('[Settings] 获取设备信息失败:', err)
+					})
+				}, 3000)
 			},
 
 			async refreshData() {
 				if (!this.connected) return
+				// 手动刷新不受防抖限制，直接发送
+				if (this._infoDebounceTimer) {
+					clearTimeout(this._infoDebounceTimer)
+					this._infoDebounceTimer = null
+				}
 				uni.showLoading({ title: '获取数据...' })
 				try {
 					await bleService.getInfo()
