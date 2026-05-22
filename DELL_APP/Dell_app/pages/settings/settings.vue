@@ -144,7 +144,7 @@
 				// 只在真正"已连接"状态时请求设备信息
 				// 过滤掉"蓝牙就绪"、"正在扫描..."、"连接成功，发现服务..."等中间状态
 				if (bleService.connected && status === '已连接') {
-					this._requestInfo()
+					this._requestInfoDebounced()
 				}
 			})
 
@@ -171,18 +171,18 @@
 			// 同步连接状态（连接状态变化由 ble-service.js 全局监听处理）
 			this.connected = bleService.connected
 			this.statusText = bleService.connected ? '已连接' : '未连接'
-			// 如果已连接，自动请求设备信息（带防抖）
+			// 如果已连接，立即请求设备信息（不防抖，让用户秒看到数据）
 			if (this.connected) {
-				this._requestInfo()
+				this._requestInfoImmediate()
 			}
 		},
 		onShow() {
 			// 每次页面显示时同步连接状态
 			this.connected = bleService.connected
 			this.statusText = bleService.connected ? '已连接' : '未连接'
-			// 如果已连接且还没有设备信息，自动请求（带防抖）
+			// 如果已连接且还没有设备信息，立即请求（不防抖）
 			if (this.connected && !this.deviceInfo.mfr_id) {
-				this._requestInfo()
+				this._requestInfoImmediate()
 			}
 		},
 		onUnload() {
@@ -240,22 +240,39 @@
 			},
 
 			/**
-			 * 自动请求设备信息（静默模式，不显示 loading）
-			 * 带 3 秒防抖：短时间内多次调用只发送一次请求
+			 * 立即发送设备信息请求（不防抖）
+			 * 用于页面加载/显示时的主动请求，让用户秒看到数据
 			 */
-			_requestInfo() {
+			_requestInfoImmediate() {
+				if (!this.connected) return
+				// 清除防抖定时器，避免防抖版本再发一次
+				if (this._infoDebounceTimer) {
+					clearTimeout(this._infoDebounceTimer)
+					this._infoDebounceTimer = null
+				}
+				bleService.getInfo().catch(err => {
+					console.error('[Settings] 获取设备信息失败:', err)
+				})
+			},
+
+			/**
+			 * 防抖请求设备信息（静默模式，不显示 loading）
+			 * 用于 onStatus 回调，防止连接过程中多次状态通知触发重复请求
+			 * 500ms 防抖：短时间内多次调用只发送一次
+			 */
+			_requestInfoDebounced() {
 				if (!this.connected) return
 				// 清除之前的防抖定时器
 				if (this._infoDebounceTimer) {
 					clearTimeout(this._infoDebounceTimer)
 				}
-				// 设置新的防抖定时器：3 秒内只执行最后一次
+				// 设置新的防抖定时器：500ms 内只执行最后一次
 				this._infoDebounceTimer = setTimeout(() => {
 					this._infoDebounceTimer = null
 					bleService.getInfo().catch(err => {
 						console.error('[Settings] 获取设备信息失败:', err)
 					})
-				}, 3000)
+				}, 500)
 			},
 
 			async refreshData() {
