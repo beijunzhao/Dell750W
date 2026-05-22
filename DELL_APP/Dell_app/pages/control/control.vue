@@ -36,19 +36,21 @@
 					v-for="device in devices"
 					:key="device.deviceId"
 					class="device-item"
-					:class="{ connected: connected && device.deviceId === bleService._deviceId }"
-					@tap="connectDevice(device)"
+					:class="{ connected: connected && device.deviceId === bleService.getDeviceId() }"
 				>
 					<view class="device-icon">🔌</view>
-					<view class="device-info">
+					<view class="device-info" @tap="connectDevice(device)">
 						<text class="device-name">{{ displayName(device) }}</text>
 						<text class="device-id">{{ device.deviceId }}</text>
 						<text class="device-rssi" v-if="device.RSSI">
 							信号: {{ device.RSSI }} dBm
 						</text>
 					</view>
-					<text class="device-connect" v-if="connected && device.deviceId === bleService._deviceId">已连接 ✓</text>
-					<text class="device-connect" v-else>连接 ›</text>
+					<view class="device-actions" v-if="connected && device.deviceId === bleService.getDeviceId()">
+						<text class="device-connected-label">已连接</text>
+						<text class="device-disconnect-btn" @tap.stop="disconnectDevice(device)">断开</text>
+					</view>
+					<text class="device-connect" v-else @tap="connectDevice(device)">连接 ›</text>
 				</view>
 			</view>
 		</view>
@@ -240,7 +242,12 @@
 
 			startScan() {
 				this.scanning = true
-				this.devices = []
+
+				// 保留已连接的设备，不清空列表
+				const connectedId = bleService.getDeviceId()
+				const connectedDevices = connectedId
+					? this.devices.filter(d => d.deviceId === connectedId)
+					: []
 
 				bleService.startScan((device) => {
 					// 去重
@@ -358,7 +365,19 @@
 				bleService.disconnect()
 				this.connected = false
 				this.statusText = '已断开'
-				this.devices = []
+				// 不清空设备列表，保留已连接过的设备记录
+			},
+
+			disconnectDevice(device) {
+				uni.showModal({
+					title: '断开连接',
+					content: `确定要断开 ${device.name || '设备'} 吗？`,
+					success: (res) => {
+						if (res.confirm) {
+							this.disconnect()
+						}
+					}
+				})
 			},
 
 			switchTab(tab) {
@@ -524,6 +543,28 @@
 	.device-connect {
 		font-size: 28rpx;
 		color: #4fc3f7;
+	}
+
+	.device-actions {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 8rpx;
+	}
+
+	.device-connected-label {
+		font-size: 22rpx;
+		color: #4caf50;
+		font-weight: 600;
+	}
+
+	.device-disconnect-btn {
+		font-size: 24rpx;
+		color: #ff5252;
+		padding: 8rpx 20rpx;
+		border: 1px solid #ff5252;
+		border-radius: 12rpx;
+		background: rgba(255, 82, 82, 0.1);
 	}
 
 	/* 控制面板 */

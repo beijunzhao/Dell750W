@@ -667,6 +667,13 @@ class BleService {
   }
 
   /**
+   * 获取已连接设备的 deviceId
+   */
+  getDeviceId() {
+    return this._deviceId
+  }
+
+  /**
    * 是否已连接
    */
   get connected() {
