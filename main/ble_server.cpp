@@ -40,6 +40,11 @@ static bool     g_connected     = false;
 static bool     g_synced        = false;
 static ble_rx_callback_t g_rx_callback = nullptr;
 
+// BLE 发送互斥锁: 防止多个发送操作的分片在 BLE 栈中交错
+// 主循环推送 get_data 和 on_ble_rx 响应 get_info 可能同时调用 ble_server_send
+// 不加锁会导致两个 JSON 的分片交错, App 端无法解析
+static SemaphoreHandle_t g_tx_mutex = NULL;
+
 // ---------- 前向声明 ----------
 static int ble_gap_event_cb(struct ble_gap_event *event, void *arg);
 static int ble_gatt_access_cb(uint16_t conn_handle, uint16_t attr_handle,
@@ -87,6 +92,15 @@ esp_err_t ble_server_init(void)
     g_connected = false;
     g_synced = false;
 
+    // 创建发送互斥锁
+    if (g_tx_mutex == NULL) {
+        g_tx_mutex = xSemaphoreCreateMutex();
+        if (g_tx_mutex == NULL) {
+            ESP_LOGE(TAG, "Failed to create TX mutex");
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
     // 初始化标准 GAP 和 GATT 服务
     ble_svc_gap_init();
     ble_svc_gatt_init();
@@ -132,6 +146,15 @@ esp_err_t ble_server_send(const char* data)
         return ESP_ERR_INVALID_STATE;
     }
 
+    // 获取发送互斥锁: 防止主循环推送和命令响应同时发送导致分片交错
+    // 如果锁被占用, 等待最多 5 秒 (正常情况下不应等待这么久)
+    if (g_tx_mutex != NULL) {
+        if (xSemaphoreTake(g_tx_mutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
+            ESP_LOGW(TAG, "TX mutex timeout (5s), dropping message");
+            return ESP_ERR_TIMEOUT;
+        }
+    }
+
     size_t total_len = strlen(data);
 
     // MTU=23 时有效载荷仅 20 字节
@@ -141,6 +164,8 @@ esp_err_t ble_server_send(const char* data)
     // App 端的粘包处理逻辑 (按 '\n' 分割) 会重组完整 JSON
     const size_t CHUNK_SIZE = 19; // 留 1 字节给 '\n'
 
+    esp_err_t result = ESP_OK;
+
     if (total_len <= CHUNK_SIZE) {
         // 数据小, 直接发送 (末尾加 '\n')
         char buf[CHUNK_SIZE + 2];
@@ -149,65 +174,70 @@ esp_err_t ble_server_send(const char* data)
         size_t buf_len = total_len + 1;
 
         struct os_mbuf *om = ble_hs_mbuf_from_flat(buf, buf_len);
-        if (!om) return ESP_ERR_NO_MEM;
+        if (!om) {
+            result = ESP_ERR_NO_MEM;
+            goto cleanup;
+        }
 
         int rc = ble_gattc_notify_custom(g_conn_handle, g_tx_val_handle, om);
         if (rc != 0) {
             ESP_LOGW(TAG, "Notify failed: %d", rc);
-            return ESP_FAIL;
+            result = ESP_FAIL;
+            goto cleanup;
         }
         ESP_LOGI(TAG, "BLE TX (%zu bytes): %s", total_len, data);
-        return ESP_OK;
+    } else {
+        // 大数据, 分包发送
+        ESP_LOGI(TAG, "BLE TX: splitting %zu bytes into chunks", total_len);
+
+        size_t offset = 0;
+        int chunk_num = 0;
+        while (offset < total_len) {
+            size_t remaining = total_len - offset;
+            bool is_last = (remaining <= CHUNK_SIZE);
+            size_t chunk_size = is_last ? remaining : CHUNK_SIZE;
+
+            char chunk[CHUNK_SIZE + 2];
+            memcpy(chunk, data + offset, chunk_size);
+            size_t chunk_len = chunk_size;
+
+            if (is_last) {
+                chunk[chunk_len] = '\n';
+                chunk_len++;
+            }
+
+            struct os_mbuf *om = ble_hs_mbuf_from_flat(chunk, chunk_len);
+            if (!om) {
+                ESP_LOGW(TAG, "Chunk %d: alloc failed", chunk_num);
+                result = ESP_ERR_NO_MEM;
+                goto cleanup;
+            }
+
+            int rc = ble_gattc_notify_custom(g_conn_handle, g_tx_val_handle, om);
+            if (rc != 0) {
+                ESP_LOGW(TAG, "Chunk %d notify failed: %d", chunk_num, rc);
+                result = ESP_FAIL;
+                goto cleanup;
+            }
+
+            ESP_LOGD(TAG, "Chunk %d: %zu bytes (offset %zu/%zu)%s",
+                     chunk_num, chunk_len, offset, total_len,
+                     is_last ? " [LAST]" : "");
+            offset += chunk_size;
+            chunk_num++;
+
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+
+        ESP_LOGI(TAG, "BLE TX complete: %d chunks, %zu total bytes", chunk_num, total_len);
     }
 
-    // 大数据, 分包发送
-    ESP_LOGI(TAG, "BLE TX: splitting %zu bytes into chunks", total_len);
-
-    size_t offset = 0;
-    int chunk_num = 0;
-    while (offset < total_len) {
-        // 计算本包大小
-        size_t remaining = total_len - offset;
-        bool is_last = (remaining <= CHUNK_SIZE);
-        size_t chunk_size = is_last ? remaining : CHUNK_SIZE;
-
-        // 构建本包数据
-        // - 中间分片: 纯数据, 不加 '\n' (App 端会累积到 _receiveBuffer)
-        // - 最后一个分片: 数据 + '\n' (App 端按 '\n' 分割, 得到完整 JSON)
-        char chunk[CHUNK_SIZE + 2];
-        memcpy(chunk, data + offset, chunk_size);
-        size_t chunk_len = chunk_size;
-
-        if (is_last) {
-            chunk[chunk_len] = '\n';
-            chunk_len++;
-        }
-
-        struct os_mbuf *om = ble_hs_mbuf_from_flat(chunk, chunk_len);
-        if (!om) {
-            ESP_LOGW(TAG, "Chunk %d: alloc failed", chunk_num);
-            return ESP_ERR_NO_MEM;
-        }
-
-        int rc = ble_gattc_notify_custom(g_conn_handle, g_tx_val_handle, om);
-        if (rc != 0) {
-            ESP_LOGW(TAG, "Chunk %d notify failed: %d", chunk_num, rc);
-            return ESP_FAIL;
-        }
-
-        ESP_LOGD(TAG, "Chunk %d: %zu bytes (offset %zu/%zu)%s",
-                 chunk_num, chunk_len, offset, total_len,
-                 is_last ? " [LAST]" : "");
-        offset += chunk_size;
-        chunk_num++;
-
-        // 增加延时到 50ms, 确保 NimBLE 栈有足够时间完成异步通知
-        // 之前 15ms 太短, 可能导致分片在 BLE 栈中乱序或重叠
-        vTaskDelay(pdMS_TO_TICKS(50));
+cleanup:
+    // 释放发送互斥锁
+    if (g_tx_mutex != NULL) {
+        xSemaphoreGive(g_tx_mutex);
     }
-
-    ESP_LOGI(TAG, "BLE TX complete: %d chunks, %zu total bytes", chunk_num, total_len);
-    return ESP_OK;
+    return result;
 }
 
 bool ble_server_is_connected(void)
