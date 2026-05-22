@@ -402,17 +402,11 @@ class BleService {
 
     if (!energy.accumulated) {
       // 首次收到数据，只记录功率和时间，不累积
+      // 不从 PMBus 读取 E_in/E_out 作为初始值，完全从 0 开始自行积分
       energy.lastW_out = json.W_out || 0
       energy.lastW_in = json.W_in || 0
       energy.lastTime = now
       energy.accumulated = true
-      // 首次使用 PMBus 的 E_in/E_out 作为初始值（如果可用且合理）
-      if (json.E_out !== undefined && json.E_out >= 0 && json.E_out <= 1000) {
-        energy.E_out = json.E_out
-      }
-      if (json.E_in !== undefined && json.E_in >= 0 && json.E_in <= 1000) {
-        energy.E_in = json.E_in
-      }
     } else {
       // 计算时间间隔 (秒)
       const dt = (now - energy.lastTime) / 1000
