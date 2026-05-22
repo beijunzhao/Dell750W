@@ -1,18 +1,11 @@
 <script>
+	import bleService from './utils/ble-service.js'
+
 	export default {
 		onLaunch: function() {
 			console.log('数控电源 App 启动')
-			// 初始化蓝牙适配器
-			// #ifdef APP-PLUS
-			uni.openBluetoothAdapter({
-				success: () => {
-					console.log('蓝牙适配器就绪')
-				},
-				fail: () => {
-					console.warn('蓝牙适配器不可用')
-				}
-			})
-			// #endif
+			// 全局只初始化一次蓝牙（各页面不再重复调用）
+			bleService.init()
 		},
 		onShow: function() {
 			console.log('App Show')

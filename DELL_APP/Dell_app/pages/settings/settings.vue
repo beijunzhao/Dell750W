@@ -134,8 +134,7 @@
 			}
 		},
 		onLoad() {
-			// 全局只初始化一次蓝牙
-			bleService.init()
+			// 蓝牙已在 App.vue onLaunch 中全局初始化，此处不再重复调用
 
 			bleService.onStatus((status) => {
 				this.statusText = status
