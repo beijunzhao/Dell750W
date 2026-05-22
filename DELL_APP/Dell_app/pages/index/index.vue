@@ -79,9 +79,9 @@
 		<!-- 风扇转速 -->
 		<view class="section-title">风扇</view>
 		<view class="info-grid">
-			<view class="info-card" v-for="(fan, idx) in fanSpeeds" :key="idx">
-				<text class="info-label">风扇 {{ idx + 1 }}</text>
-				<text class="info-value">{{ fan.toFixed(0) }} <text class="info-unit">RPM</text></text>
+			<view class="info-card">
+				<text class="info-label">风扇</text>
+				<text class="info-value">{{ fanSpeed.toFixed(0) }} <text class="info-unit">RPM</text></text>
 			</view>
 		</view>
 
@@ -92,7 +92,7 @@
 				{{ powerData.power_on ? '运行中' : '已关闭' }}
 			</view>
 			<view class="status-chip" :class="{ ok: powerData.device_online }">
-				{{ powerData.device_online ? 'PMBus 在线' : 'PMBus 离线' }}
+				{{ powerData.device_online ? '设备在线' : '设备离线' }}
 			</view>
 		</view>
 
@@ -163,7 +163,7 @@
 					V_out: 0, I_out: 0, V_in: 0, I_in: 0,
 					W_out: 0, W_in: 0, E_out: 0, E_in: 0,
 					temperature: [0, 0, 0],
-					fan_speed: [0, 0],
+					fan_speed: 0,
 					power_on: 0,
 					device_online: false
 				},
@@ -218,8 +218,8 @@
 			temperatures() {
 				return this.powerData.temperature || [0, 0, 0]
 			},
-			fanSpeeds() {
-				return this.powerData.fan_speed || [0, 0]
+			fanSpeed() {
+				return this.powerData.fan_speed || 0
 			},
 			voltagePercent() {
 				return Math.min((this.powerData.V_out / this.voltageMax) * 100, 100)

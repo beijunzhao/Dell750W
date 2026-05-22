@@ -173,7 +173,7 @@ const char* PMBus::getDataJson()
         "\"W_out\":%.1f,\"W_in\":%.1f,"
         "\"E_out\":%.1f,\"E_in\":%.1f,"
         "\"temperature\":[%.1f,%.1f,%.1f],"
-        "\"fan_speed\":[%.0f,%.0f],"
+        "\"fan_speed\":%.0f,"
         "\"device_online\":true"
         "}",
         V_out, I_out,
@@ -181,7 +181,7 @@ const char* PMBus::getDataJson()
         W_out, W_in,
         E_out, E_in,
         temperature[0], temperature[1], temperature[2],
-        fanSpeed[0], fanSpeed[1]
+        fanSpeed[0]
     );
     return _jsonBuf;
 }

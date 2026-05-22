@@ -376,7 +376,7 @@ static const char* build_full_data_json(void)
         "\"E_out\":%.1f,\"E_in\":%.1f,"
         "\"V_ext\":%.3f,"
         "\"temperature\":[%.1f,%.1f,%.1f],"
-        "\"fan_speed\":[%.0f,%.0f],"
+        "\"fan_speed\":%.0f,"
         "\"power_on\":%d,"
         "\"V_set\":%.3f,\"I_set\":%.3f,"
         "\"device_online\":%s"
