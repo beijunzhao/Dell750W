@@ -31,6 +31,16 @@ class BleService {
     this._receiveBuffer = ''
     this._initialized = false  // 防止重复初始化
     this._connectionStateChangeRegistered = false  // 防止重复注册连接状态监听
+
+    // ---------- 累计电能计算 (App 端积分, 不依赖 PMBus E_in/E_out 寄存器) ----------
+    this._energyData = {
+      E_out: 0,        // 累计输出电能 (Wh)
+      E_in: 0,         // 累计输入电能 (Wh)
+      lastW_out: 0,    // 上次输出功率 (W)
+      lastW_in: 0,     // 上次输入功率 (W)
+      lastTime: 0,     // 上次更新时间戳 (ms)
+      accumulated: false // 是否已累积过 (首次数据只记录不累积)
+    }
   }
 
   /**
@@ -63,6 +73,8 @@ class BleService {
           this._txCharId = ''
           this._rxCharId = ''
           this._receiveBuffer = ''
+          // 断开连接时重置累计电能（重新连接后重新开始累积）
+          this._resetEnergy()
           this._notifyStatus('已断开')
         } else {
           this._notifyStatus('已连接')
@@ -360,6 +372,8 @@ class BleService {
           try {
             const json = JSON.parse(trimmed)
             console.log('[BLE] 收到数据:', json)
+            // 注入 App 端自行计算的累计电能（替换 PMBus 不可靠的 E_in/E_out）
+            this._injectEnergyData(json)
             this._onDataCallback && this._onDataCallback(json)
           } catch (e) {
             console.warn('[BLE] 解析失败:', trimmed)
@@ -367,6 +381,74 @@ class BleService {
         }
       }
     })
+  }
+
+  /**
+   * 累计电能积分计算
+   * 根据 W_out/W_in 功率值和时间间隔计算累计电能，替换 PMBus 不可靠的 E_in/E_out 寄存器
+   *
+   * 公式: ΔE (Wh) = P (W) × Δt (s) / 3600
+   * ESP32 每 2 秒推送一次数据，所以每次累积 ≈ P × 2 / 3600 Wh
+   *
+   * @param {Object} json 从 ESP32 收到的数据对象（会被修改）
+   */
+  _injectEnergyData(json) {
+    // 只处理包含功率数据的推送（get_data 响应或自动推送）
+    if (json.W_out === undefined && json.W_in === undefined) return
+    if (json.ack !== undefined) return  // 命令确认响应，不处理
+
+    const now = Date.now()
+    const energy = this._energyData
+
+    if (!energy.accumulated) {
+      // 首次收到数据，只记录功率和时间，不累积
+      energy.lastW_out = json.W_out || 0
+      energy.lastW_in = json.W_in || 0
+      energy.lastTime = now
+      energy.accumulated = true
+      // 首次使用 PMBus 的 E_in/E_out 作为初始值（如果可用且合理）
+      if (json.E_out !== undefined && json.E_out >= 0 && json.E_out <= 1000) {
+        energy.E_out = json.E_out
+      }
+      if (json.E_in !== undefined && json.E_in >= 0 && json.E_in <= 1000) {
+        energy.E_in = json.E_in
+      }
+    } else {
+      // 计算时间间隔 (秒)
+      const dt = (now - energy.lastTime) / 1000
+      if (dt > 0 && dt < 60) {  // 防止长时间断开后累积异常值
+        // 使用梯形积分: ΔE = (P_prev + P_curr) / 2 × Δt / 3600
+        const avgW_out = (energy.lastW_out + (json.W_out || 0)) / 2
+        const avgW_in = (energy.lastW_in + (json.W_in || 0)) / 2
+        const dE_out = avgW_out * dt / 3600  // W × s / 3600 = Wh
+        const dE_in = avgW_in * dt / 3600
+
+        energy.E_out += dE_out
+        energy.E_in += dE_in
+      }
+      // 更新上次值
+      energy.lastW_out = json.W_out || 0
+      energy.lastW_in = json.W_in || 0
+      energy.lastTime = now
+    }
+
+    // 注入计算后的累计电能，覆盖 PMBus 的 E_in/E_out
+    json.E_out = Math.round(energy.E_out * 10) / 10  // 保留 1 位小数
+    json.E_in = Math.round(energy.E_in * 10) / 10
+  }
+
+  /**
+   * 断开连接时重置累计电能（重新连接后重新开始累积）
+   */
+  _resetEnergy() {
+    this._energyData = {
+      E_out: 0,
+      E_in: 0,
+      lastW_out: 0,
+      lastW_in: 0,
+      lastTime: 0,
+      accumulated: false
+    }
   }
 
   /**
