@@ -6,6 +6,10 @@
 			console.log('数控电源 App 启动')
 			// 全局只初始化一次蓝牙（各页面不再重复调用）
 			bleService.init()
+			// 初始化后自动重连上次连接的设备
+			setTimeout(() => {
+				bleService.autoReconnect()
+			}, 1000)  // 延迟1秒，等待蓝牙适配器初始化完成
 		},
 		onShow: function() {
 			console.log('App Show')

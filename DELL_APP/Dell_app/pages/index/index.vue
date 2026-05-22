@@ -315,7 +315,16 @@
 				this.statusText = status
 				this.connected = bleService.connected
 				if (this.connected) {
-					this.bleConnectedName = bleService.getDeviceList().find(d => d.deviceId === bleService.getDeviceId())?.name || '已连接设备'
+					const deviceId = bleService.getDeviceId()
+					this.bleConnectedName = bleService.getDeviceList().find(d => d.deviceId === deviceId)?.name
+					if (!this.bleConnectedName) {
+						try {
+							const stored = uni.getStorageSync('ble_last_device')
+							this.bleConnectedName = (stored && stored.deviceId === deviceId) ? (stored.name || '已连接设备') : '已连接设备'
+						} catch (e) {
+							this.bleConnectedName = '已连接设备'
+						}
+					}
 				}
 			})
 
@@ -358,7 +367,21 @@
 			this.connected = bleService.connected
 			this.statusText = bleService.connected ? '已连接' : '点击连接设备'
 			if (this.connected) {
-				this.bleConnectedName = bleService.getDeviceList().find(d => d.deviceId === bleService.getDeviceId())?.name || '已连接设备'
+				const deviceId = bleService.getDeviceId()
+				this.bleConnectedName = bleService.getDeviceList().find(d => d.deviceId === deviceId)?.name
+				// 如果设备列表中没有（自动重连时可能还没扫描），尝试从本地存储读取
+				if (!this.bleConnectedName) {
+					try {
+						const stored = uni.getStorageSync('ble_last_device')
+						if (stored && stored.deviceId === deviceId) {
+							this.bleConnectedName = stored.name || '已连接设备'
+						} else {
+							this.bleConnectedName = '已连接设备'
+						}
+					} catch (e) {
+						this.bleConnectedName = '已连接设备'
+					}
+				}
 			}
 		},
 		onUnload() {
@@ -615,7 +638,7 @@
 				}
 				uni.showLoading({ title: '连接中...' })
 				try {
-					await bleService.connect(device.deviceId)
+					await bleService.connect(device.deviceId, device.name)
 					this.connected = true
 					this.bleConnectedName = device.name
 					this.closeBleModal()

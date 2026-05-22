@@ -19,6 +19,9 @@ const BLE_SERVICE_UUID = '6E400001-B5A3-F393-E0A9-E50E24DCCA9E'
 const BLE_TX_UUID = '6E400002-B5A3-F393-E0A9-E50E24DCCA9E' // ESP32 → App (通知)
 const BLE_RX_UUID = '6E400003-B5A3-F393-E0A9-E50E24DCCA9E' // App → ESP32 (写入)
 
+// 本地存储 key：保存上次连接的设备信息，用于自动重连
+const STORAGE_KEY_LAST_DEVICE = 'ble_last_device'
+
 class BleService {
   constructor() {
     this._deviceId = ''
@@ -222,8 +225,9 @@ class BleService {
   /**
    * 连接 BLE 设备
    * @param {string} deviceId 设备 ID
+   * @param {string} [deviceName] 设备名称（可选，用于保存到本地存储）
    */
-  connect(deviceId) {
+  connect(deviceId, deviceName) {
     return new Promise((resolve, reject) => {
       this._deviceId = deviceId
 
@@ -252,7 +256,11 @@ class BleService {
             if (!resolved) {
               resolved = true
               clearTimeout(timeout)
-              this._discoverServices().then(resolve).catch(reject)
+              this._discoverServices().then(() => {
+                // 连接完全成功后，保存设备信息到本地存储（下次启动自动重连）
+                this._saveLastDevice(deviceId, deviceName || '')
+                resolve()
+              }).catch(reject)
             }
           }, 2000)
         },
@@ -268,6 +276,64 @@ class BleService {
         }
       })
     })
+  }
+
+  /**
+   * 自动重连上次连接的设备
+   * 在 App 启动时调用，如果本地存储中有上次连接的设备信息，自动尝试连接
+   * @returns {Promise<boolean>} 是否成功发起重连（不代表连接成功）
+   */
+  async autoReconnect() {
+    const lastDevice = this._getLastDevice()
+    if (!lastDevice) {
+      console.log('[BLE] 没有上次连接的设备，跳过自动重连')
+      return false
+    }
+    if (this._connected) {
+      console.log('[BLE] 已连接，跳过自动重连')
+      return false
+    }
+    console.log('[BLE] 尝试自动重连:', lastDevice.name || lastDevice.deviceId)
+    this._notifyStatus('自动重连中...')
+    try {
+      await this.connect(lastDevice.deviceId, lastDevice.name)
+      console.log('[BLE] 自动重连成功:', lastDevice.name || lastDevice.deviceId)
+      this._notifyStatus('已连接')
+      return true
+    } catch (err) {
+      console.warn('[BLE] 自动重连失败:', err.message || err)
+      this._notifyStatus('自动重连失败，请手动连接')
+      return false
+    }
+  }
+
+  /**
+   * 保存上次连接的设备信息到本地存储
+   */
+  _saveLastDevice(deviceId, name) {
+    try {
+      const info = { deviceId, name, time: Date.now() }
+      uni.setStorageSync(STORAGE_KEY_LAST_DEVICE, info)
+      console.log('[BLE] 已保存设备信息到本地:', name || deviceId)
+    } catch (err) {
+      console.warn('[BLE] 保存设备信息失败:', err)
+    }
+  }
+
+  /**
+   * 从本地存储读取上次连接的设备信息
+   * @returns {Object|null} { deviceId, name, time } 或 null
+   */
+  _getLastDevice() {
+    try {
+      const info = uni.getStorageSync(STORAGE_KEY_LAST_DEVICE)
+      if (info && info.deviceId) {
+        return info
+      }
+    } catch (err) {
+      console.warn('[BLE] 读取设备信息失败:', err)
+    }
+    return null
   }
 
   /**
