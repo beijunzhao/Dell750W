@@ -131,8 +131,8 @@
 					mfr_serial: '',
 					pmbus_revision: ''
 				},
-				/** 防抖定时器：防止 _requestInfo() 被频繁调用 */
-				_infoDebounceTimer: null
+				/** 标记是否已请求过设备信息，避免重复请求 */
+				_infoRequested: false
 			}
 		},
 		onLoad() {
@@ -141,15 +141,10 @@
 			bleService.onStatus((status) => {
 				this.statusText = status
 				this.connected = bleService.connected
-				// 只在真正"已连接"状态时请求设备信息
-				// 过滤掉"蓝牙就绪"、"正在扫描..."、"连接成功，发现服务..."等中间状态
-				if (bleService.connected && status === '已连接') {
-					this._requestInfoDebounced()
-				}
 			})
 
 			bleService.onData((data) => {
-				// 更新设备信息
+				// 信息页只处理设备信息（MFR 数据），不处理实时推送数据
 				if (data.MFR_ID) {
 					this.deviceInfo.mfr_id = this._parseMfrId(data.MFR_ID)
 				}
@@ -157,8 +152,6 @@
 				if (data.MFR_REVISION) this.deviceInfo.mfr_revision = data.MFR_REVISION
 				if (data.MFR_LOCATION) this.deviceInfo.mfr_location = data.MFR_LOCATION
 				if (data.MFR_DATE) {
-					// 解析生产日期：PMBus 格式为 YYWW（年+周），如 "15100"=15年第100周
-					// 台达电源使用 5 位格式：YY + WWW（3位周数）
 					this.deviceInfo.mfr_date = this._parseMfrDate(data.MFR_DATE)
 				}
 				if (data.MFR_SERIAL) this.deviceInfo.mfr_serial = data.MFR_SERIAL
@@ -168,29 +161,19 @@
 				}
 			})
 
-			// 同步连接状态（连接状态变化由 ble-service.js 全局监听处理）
+			// 同步连接状态
 			this.connected = bleService.connected
 			this.statusText = bleService.connected ? '已连接' : '未连接'
-			// 如果已连接，立即请求设备信息（不防抖，让用户秒看到数据）
-			if (this.connected) {
-				this._requestInfoImmediate()
+			// 页面加载时只请求一次设备信息，不重复请求
+			if (this.connected && !this._infoRequested) {
+				this._infoRequested = true
+				this._requestInfo()
 			}
 		},
 		onShow() {
 			// 每次页面显示时同步连接状态
 			this.connected = bleService.connected
 			this.statusText = bleService.connected ? '已连接' : '未连接'
-			// 如果已连接且还没有设备信息，立即请求（不防抖）
-			if (this.connected && !this.deviceInfo.mfr_id) {
-				this._requestInfoImmediate()
-			}
-		},
-		onUnload() {
-			// 页面卸载时清除防抖定时器
-			if (this._infoDebounceTimer) {
-				clearTimeout(this._infoDebounceTimer)
-				this._infoDebounceTimer = null
-			}
 		},
 		methods: {
 
@@ -239,49 +222,16 @@
 				return `${year}-${String(month).padStart(2, '0')}`
 			},
 
-			/**
-			 * 立即发送设备信息请求（不防抖）
-			 * 用于页面加载/显示时的主动请求，让用户秒看到数据
-			 */
-			_requestInfoImmediate() {
+			/** 请求设备信息（静默模式，不显示 loading） */
+			_requestInfo() {
 				if (!this.connected) return
-				// 清除防抖定时器，避免防抖版本再发一次
-				if (this._infoDebounceTimer) {
-					clearTimeout(this._infoDebounceTimer)
-					this._infoDebounceTimer = null
-				}
 				bleService.getInfo().catch(err => {
 					console.error('[Settings] 获取设备信息失败:', err)
 				})
 			},
 
-			/**
-			 * 防抖请求设备信息（静默模式，不显示 loading）
-			 * 用于 onStatus 回调，防止连接过程中多次状态通知触发重复请求
-			 * 500ms 防抖：短时间内多次调用只发送一次
-			 */
-			_requestInfoDebounced() {
-				if (!this.connected) return
-				// 清除之前的防抖定时器
-				if (this._infoDebounceTimer) {
-					clearTimeout(this._infoDebounceTimer)
-				}
-				// 设置新的防抖定时器：500ms 内只执行最后一次
-				this._infoDebounceTimer = setTimeout(() => {
-					this._infoDebounceTimer = null
-					bleService.getInfo().catch(err => {
-						console.error('[Settings] 获取设备信息失败:', err)
-					})
-				}, 500)
-			},
-
 			async refreshData() {
 				if (!this.connected) return
-				// 手动刷新不受防抖限制，直接发送
-				if (this._infoDebounceTimer) {
-					clearTimeout(this._infoDebounceTimer)
-					this._infoDebounceTimer = null
-				}
 				uni.showLoading({ title: '获取数据...' })
 				try {
 					await bleService.getInfo()
