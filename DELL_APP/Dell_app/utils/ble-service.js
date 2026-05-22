@@ -31,6 +31,7 @@ class BleService {
     this._receiveBuffer = ''
     this._initialized = false  // 防止重复初始化
     this._connectionStateChangeRegistered = false  // 防止重复注册连接状态监听
+    this._lastData = null  // 缓存最后一条数据，用于新页面注册时立即回掉
 
     // ---------- 累计电能计算 (App 端积分, 不依赖 PMBus E_in/E_out 寄存器) ----------
     this._energyData = {
@@ -73,6 +74,7 @@ class BleService {
           this._txCharId = ''
           this._rxCharId = ''
           this._receiveBuffer = ''
+          this._lastData = null  // 断开连接时清除缓存数据
           // 断开连接时重置累计电能（重新连接后重新开始累积）
           this._resetEnergy()
           this._notifyStatus('已断开')
@@ -374,6 +376,8 @@ class BleService {
             console.log('[BLE] 收到数据:', json)
             // 注入 App 端自行计算的累计电能（替换 PMBus 不可靠的 E_in/E_out）
             this._injectEnergyData(json)
+            // 缓存最后一条数据，用于新页面注册时立即回掉
+            this._lastData = json
             this._onDataCallback && this._onDataCallback(json)
           } catch (e) {
             console.warn('[BLE] 解析失败:', trimmed)
@@ -613,10 +617,15 @@ class BleService {
 
   /**
    * 设置数据接收回调
+   * 注册后立即用缓存数据回掉一次，避免新页面需等待下次推送才有数据显示
    * @param {Function} callback 回调函数 (data)
    */
   onData(callback) {
     this._onDataCallback = callback
+    // 如果有缓存数据，立即回掉一次，让新页面秒显示
+    if (this._lastData) {
+      callback(this._lastData)
+    }
   }
 
   /**
