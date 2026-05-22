@@ -149,13 +149,7 @@
 			bleService.onData((data) => {
 				// 更新设备信息
 				if (data.MFR_ID) {
-					// 解析厂商 ID：台达电源常见标识
-					const id = data.MFR_ID.toUpperCase()
-					if (id.includes('DELTA') || id.includes('DPS') || id.includes('台达')) {
-						this.deviceInfo.mfr_id = '台达 (Delta)'
-					} else {
-						this.deviceInfo.mfr_id = data.MFR_ID
-					}
+					this.deviceInfo.mfr_id = this._parseMfrId(data.MFR_ID)
 				}
 				if (data.MFR_MODEL) this.deviceInfo.mfr_model = data.MFR_MODEL
 				if (data.MFR_REVISION) this.deviceInfo.mfr_revision = data.MFR_REVISION
@@ -190,6 +184,29 @@
 			}
 		},
 		methods: {
+
+			/**
+			 * 根据 MFR_ID 字符串解析厂商名称
+			 * 不同电源厂商的 MFR_ID 格式不同，通过前缀/关键字匹配识别
+			 * @param {string} id PMBus 读取的原始 MFR_ID
+			 * @returns {string} 解析后的厂商显示名称
+			 */
+			_parseMfrId(id) {
+				if (!id) return '--'
+				const upper = id.toUpperCase().trim()
+				// 厂商识别映射表（按优先级排列）
+				if (upper.includes('DELTA') || upper.includes('DPS-')) return '台达 (Delta)'
+				if (upper.includes('ARTESYN')) return 'Artesyn (安森美)'
+				if (upper.includes('FLEX') || upper.includes('FLEXTRONICS')) return 'Flex (伟创力)'
+				if (upper.includes('LITEON') || upper.includes('LITE-ON')) return '光宝 (Lite-On)'
+				if (upper.includes('ACBEL')) return '康舒 (AcBel)'
+				if (upper.includes('CHICONY')) return '群光 (Chicony)'
+				if (upper.includes('HIPRO')) return '高效 (HiPro)'
+				// 戴尔 PN 格式：以数字开头，如 09PXCVA01PS
+				if (/^\d{2}[A-Z]/.test(upper)) return '台达 (Delta)'  // 戴尔电源多为台达代工
+				// 未知厂商，返回原始值
+				return id
+			},
 
 			/**
 			 * 解析 PMBus 生产日期格式 (YYWWW) 为年月
