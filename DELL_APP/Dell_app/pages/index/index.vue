@@ -219,7 +219,9 @@
 				return this.powerData.temperature || [0, 0, 0]
 			},
 			fanSpeed() {
-				return this.powerData.fan_speed || 0
+				const val = this.powerData.fan_speed
+				if (Array.isArray(val)) return val[0] || 0  // 兼容旧固件数组格式
+				return val || 0
 			},
 			voltagePercent() {
 				return Math.min((this.powerData.V_out / this.voltageMax) * 100, 100)

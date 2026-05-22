@@ -387,7 +387,7 @@ static const char* build_full_data_json(void)
         PMBus::E_out, PMBus::E_in,
         ADCSampler::getVoltage(),
         PMBus::temperature[0], PMBus::temperature[1], PMBus::temperature[2],
-        PMBus::fanSpeed[0], PMBus::fanSpeed[1],
+        PMBus::fanSpeed[0],
         PowerControl::isPoweredOn() ? 1 : 0,
         PowerControl::getSetVoltage(), PowerControl::getSetCurrent(),
         PMBus::isDeviceOnline() ? "true" : "false"
