@@ -32,6 +32,7 @@ class BleService {
     this._initialized = false  // 防止重复初始化
     this._connectionStateChangeRegistered = false  // 防止重复注册连接状态监听
     this._lastData = null  // 缓存最后一条数据，用于新页面注册时立即回掉
+    this._deviceInfo = null  // 缓存设备信息（连接成功后自动获取一次，固定不变）
 
     // ---------- 累计电能计算 (App 端积分, 不依赖 PMBus E_in/E_out 寄存器) ----------
     this._energyData = {
@@ -339,6 +340,8 @@ class BleService {
           // 监听数据
           this._startListening()
           this._notifyStatus('已连接')
+          // 连接成功后自动获取一次设备信息（固定不变，缓存后不再重复请求）
+          this._requestDeviceInfo()
           resolve()
         },
         fail: (err) => {
@@ -381,6 +384,10 @@ class BleService {
           try {
             const json = JSON.parse(trimmed)
             console.log('[BLE] 收到数据:', json)
+            // 缓存设备信息（MFR 数据是固定不变的，连接后只获取一次）
+            if (json.MFR_ID) {
+              this._deviceInfo = json
+            }
             // 注入 App 端自行计算的累计电能（替换 PMBus 不可靠的 E_in/E_out）
             this._injectEnergyData(json)
             // 缓存最后一条数据，用于新页面注册时立即回掉
@@ -678,6 +685,29 @@ class BleService {
    */
   getDeviceId() {
     return this._deviceId
+  }
+
+  /**
+   * 连接成功后自动获取设备信息（只请求一次，缓存后不再重复）
+   */
+  _requestDeviceInfo() {
+    // 如果已经有缓存，不再重复请求
+    if (this._deviceInfo) return
+    // 延迟 500ms 发送，等连接稳定后再请求
+    setTimeout(() => {
+      this.send({ cmd: 'get_info' }).catch(err => {
+        console.warn('[BLE] 自动获取设备信息失败:', err)
+      })
+    }, 500)
+  }
+
+  /**
+   * 获取缓存的设备信息
+   * 设备信息是固定不变的（MFR_ID/MFR_MODEL 等），连接后只获取一次
+   * @returns {Object|null} 设备信息对象，未获取到时返回 null
+   */
+  getDeviceInfo() {
+    return this._deviceInfo
   }
 
   /**

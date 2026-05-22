@@ -130,9 +130,7 @@
 					mfr_date: '',
 					mfr_serial: '',
 					pmbus_revision: ''
-				},
-				/** 标记是否已请求过设备信息，避免重复请求 */
-				_infoRequested: false
+				}
 			}
 		},
 		onLoad() {
@@ -143,32 +141,11 @@
 				this.connected = bleService.connected
 			})
 
-			bleService.onData((data) => {
-				// 信息页只处理设备信息（MFR 数据），不处理实时推送数据
-				if (data.MFR_ID) {
-					this.deviceInfo.mfr_id = this._parseMfrId(data.MFR_ID)
-				}
-				if (data.MFR_MODEL) this.deviceInfo.mfr_model = data.MFR_MODEL
-				if (data.MFR_REVISION) this.deviceInfo.mfr_revision = data.MFR_REVISION
-				if (data.MFR_LOCATION) this.deviceInfo.mfr_location = data.MFR_LOCATION
-				if (data.MFR_DATE) {
-					this.deviceInfo.mfr_date = this._parseMfrDate(data.MFR_DATE)
-				}
-				if (data.MFR_SERIAL) this.deviceInfo.mfr_serial = data.MFR_SERIAL
-				if (data.pmbus_revision !== undefined) {
-					const rev = data.pmbus_revision
-					this.deviceInfo.pmbus_revision = `${Math.floor(rev / 10)}.${rev % 10}`
-				}
-			})
-
 			// 同步连接状态
 			this.connected = bleService.connected
 			this.statusText = bleService.connected ? '已连接' : '未连接'
-			// 页面加载时只请求一次设备信息，不重复请求
-			if (this.connected && !this._infoRequested) {
-				this._infoRequested = true
-				this._requestInfo()
-			}
+			// 从缓存读取设备信息（连接成功后由 ble-service.js 自动获取并缓存）
+			this._loadDeviceInfo()
 		},
 		onShow() {
 			// 每次页面显示时同步连接状态
@@ -222,12 +199,36 @@
 				return `${year}-${String(month).padStart(2, '0')}`
 			},
 
-			/** 请求设备信息（静默模式，不显示 loading） */
-			_requestInfo() {
-				if (!this.connected) return
-				bleService.getInfo().catch(err => {
-					console.error('[Settings] 获取设备信息失败:', err)
-				})
+			/**
+			 * 从缓存加载设备信息
+			 * 设备信息在连接成功后由 ble-service.js 自动获取并缓存，不会改变
+			 * 信息页直接从缓存读取，不再发送请求
+			 */
+			_loadDeviceInfo() {
+				const info = bleService.getDeviceInfo()
+				if (info) {
+					this._applyDeviceInfo(info)
+				}
+			},
+
+			/**
+			 * 将设备信息对象解析并应用到页面显示
+			 */
+			_applyDeviceInfo(data) {
+				if (data.MFR_ID) {
+					this.deviceInfo.mfr_id = this._parseMfrId(data.MFR_ID)
+				}
+				if (data.MFR_MODEL) this.deviceInfo.mfr_model = data.MFR_MODEL
+				if (data.MFR_REVISION) this.deviceInfo.mfr_revision = data.MFR_REVISION
+				if (data.MFR_LOCATION) this.deviceInfo.mfr_location = data.MFR_LOCATION
+				if (data.MFR_DATE) {
+					this.deviceInfo.mfr_date = this._parseMfrDate(data.MFR_DATE)
+				}
+				if (data.MFR_SERIAL) this.deviceInfo.mfr_serial = data.MFR_SERIAL
+				if (data.pmbus_revision !== undefined) {
+					const rev = data.pmbus_revision
+					this.deviceInfo.pmbus_revision = `${Math.floor(rev / 10)}.${rev % 10}`
+				}
 			},
 
 			async refreshData() {
@@ -235,10 +236,13 @@
 				uni.showLoading({ title: '获取数据...' })
 				try {
 					await bleService.getInfo()
+					// 等待 ESP32 响应（get_info 响应会触发 _startListening 中的缓存更新）
+					// 延迟 1 秒后从缓存读取最新数据
 					setTimeout(() => {
 						uni.hideLoading()
-						uni.showToast({ title: '已请求数据', icon: 'success' })
-					}, 500)
+						this._loadDeviceInfo()
+						uni.showToast({ title: '已刷新', icon: 'success' })
+					}, 1000)
 				} catch (err) {
 					uni.hideLoading()
 					uni.showToast({ title: '请求失败', icon: 'error' })
