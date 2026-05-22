@@ -137,10 +137,31 @@ esp_err_t ble_server_send(const char* data)
     // MTU=23 时有效载荷仅 20 字节
     // 如果数据超过 20 字节, NimBLE 的 ble_gattc_notify_custom 会自动分片
     // 但某些 Android 设备可能无法正确处理自动分片
-    // 因此我们手动分包: 每包不超过 18 字节, 每包末尾都加 '\n'
-    // Android 的 onBLECharacteristicValueChange 可能合并多个分片到一次回调
-    // 每个分片末尾都加 '\n' 确保即使合并也能正确分割
-    const size_t CHUNK_SIZE = 18; // 留 2 字节给 '\r\n'
+    // 因此我们手动分包: 每包不超过 19 字节, 最后一包末尾加 '\n'
+    // App 端的粘包处理逻辑 (按 '\n' 分割) 会重组完整 JSON
+    const size_t CHUNK_SIZE = 19; // 留 1 字节给 '\n'
+
+    if (total_len <= CHUNK_SIZE) {
+        // 数据小, 直接发送 (末尾加 '\n')
+        char buf[CHUNK_SIZE + 2];
+        memcpy(buf, data, total_len);
+        buf[total_len] = '\n';
+        size_t buf_len = total_len + 1;
+
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(buf, buf_len);
+        if (!om) return ESP_ERR_NO_MEM;
+
+        int rc = ble_gattc_notify_custom(g_conn_handle, g_tx_val_handle, om);
+        if (rc != 0) {
+            ESP_LOGW(TAG, "Notify failed: %d", rc);
+            return ESP_FAIL;
+        }
+        ESP_LOGI(TAG, "BLE TX (%zu bytes): %s", total_len, data);
+        return ESP_OK;
+    }
+
+    // 大数据, 分包发送
+    ESP_LOGI(TAG, "BLE TX: splitting %zu bytes into chunks", total_len);
 
     size_t offset = 0;
     int chunk_num = 0;
@@ -150,14 +171,17 @@ esp_err_t ble_server_send(const char* data)
         bool is_last = (remaining <= CHUNK_SIZE);
         size_t chunk_size = is_last ? remaining : CHUNK_SIZE;
 
-        // 构建本包数据: 每个分片末尾都加 '\n'
-        // 即使 Android 合并多个分片到一次回调, 每个分片末尾的 '\n'
-        // 也能让 App 端的 split('\n') 正确分割出完整 JSON
-        char chunk[CHUNK_SIZE + 3];
+        // 构建本包数据
+        // - 中间分片: 纯数据, 不加 '\n' (App 端会累积到 _receiveBuffer)
+        // - 最后一个分片: 数据 + '\n' (App 端按 '\n' 分割, 得到完整 JSON)
+        char chunk[CHUNK_SIZE + 2];
         memcpy(chunk, data + offset, chunk_size);
         size_t chunk_len = chunk_size;
-        chunk[chunk_len] = '\n';
-        chunk_len++;
+
+        if (is_last) {
+            chunk[chunk_len] = '\n';
+            chunk_len++;
+        }
 
         struct os_mbuf *om = ble_hs_mbuf_from_flat(chunk, chunk_len);
         if (!om) {
@@ -177,8 +201,9 @@ esp_err_t ble_server_send(const char* data)
         offset += chunk_size;
         chunk_num++;
 
-        // 短延时, 给 BLE 栈时间处理
-        vTaskDelay(pdMS_TO_TICKS(15));
+        // 增加延时到 50ms, 确保 NimBLE 栈有足够时间完成异步通知
+        // 之前 15ms 太短, 可能导致分片在 BLE 栈中乱序或重叠
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 
     ESP_LOGI(TAG, "BLE TX complete: %d chunks, %zu total bytes", chunk_num, total_len);

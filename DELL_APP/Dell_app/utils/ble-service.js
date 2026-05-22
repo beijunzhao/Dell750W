@@ -362,8 +362,7 @@ class BleService {
       // 直接将 ArrayBuffer 转为字符串 (兼容 uni-app Android, 避免 TextDecoder 不可用)
       const text = this._arrayBufferToString(res.value)
 
-      // 处理粘包: 每个分片末尾都有 '\n' (ESP32 ble_server_send 每包都加)
-      // 但 Android 可能合并多个分片到一次回调, 所以用 split('\n') 分割
+      // 处理粘包
       this._receiveBuffer += text
       const lines = this._receiveBuffer.split('\n')
       // 最后一个可能不完整，保留到下次
@@ -378,17 +377,18 @@ class BleService {
 
       for (const line of lines) {
         const trimmed = line.trim()
-        if (!trimmed) continue  // 跳过空行 (每个分片末尾的 '\n' 可能产生空行)
-        try {
-          const json = JSON.parse(trimmed)
-          console.log('[BLE] 收到数据:', json)
-          // 注入 App 端自行计算的累计电能（替换 PMBus 不可靠的 E_in/E_out）
-          this._injectEnergyData(json)
-          // 缓存最后一条数据，用于新页面注册时立即回掉
-          this._lastData = json
-          this._onDataCallback && this._onDataCallback(json)
-        } catch (e) {
-          console.warn('[BLE] 解析失败:', trimmed)
+        if (trimmed) {
+          try {
+            const json = JSON.parse(trimmed)
+            console.log('[BLE] 收到数据:', json)
+            // 注入 App 端自行计算的累计电能（替换 PMBus 不可靠的 E_in/E_out）
+            this._injectEnergyData(json)
+            // 缓存最后一条数据，用于新页面注册时立即回掉
+            this._lastData = json
+            this._onDataCallback && this._onDataCallback(json)
+          } catch (e) {
+            console.warn('[BLE] 解析失败:', trimmed)
+          }
         }
       }
     })
