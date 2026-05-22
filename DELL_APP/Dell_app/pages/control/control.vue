@@ -1,156 +1,207 @@
 <template>
 	<view class="container">
 
-		<!-- 标签切换 (连接后显示) -->
-		<view v-if="connected" class="tab-bar">
-			<view class="tab-item" :class="{ active: activeTab === 'control' }" @tap="activeTab = 'control'">
-				<text class="tab-icon">🎛️</text>
-				<text class="tab-label">控制</text>
-			</view>
-			<view class="tab-item" :class="{ active: activeTab === 'device' }" @tap="activeTab = 'device'">
-				<text class="tab-icon">📡</text>
-				<text class="tab-label">设备</text>
-			</view>
+		<!-- 未连接提示 -->
+		<view v-if="!connected" class="disconnected-hint">
+			<text class="disconnected-icon">📡</text>
+			<text class="disconnected-text">未连接设备</text>
+			<text class="disconnected-sub">请前往首页点击蓝牙按钮连接设备</text>
+			<button class="goto-home-btn" @tap="switchTab('index')">前往首页</button>
 		</view>
 
-		<!-- 设备列表 -->
-		<view class="scan-section" v-show="!connected || activeTab === 'device'">
-			<view class="scan-header">
-				<text class="scan-title">蓝牙设备</text>
-				<button class="scan-btn" :disabled="scanning" @tap="startScan">
-					{{ scanning ? '扫描中...' : '扫描设备' }}
-				</button>
-			</view>
+		<!-- 监控面板 (已连接时显示) -->
+		<view v-if="connected" class="monitor-panel">
 
-			<view v-if="scanning" class="scanning-indicator">
-				<text class="scanning-text">正在搜索蓝牙设备...</text>
-			</view>
-
-			<view v-if="devices.length === 0 && !scanning" class="empty-state">
-				<text class="empty-icon">📡</text>
-				<text class="empty-text">点击"扫描设备"搜索 Dell-PSU-Controller</text>
-			</view>
-
-			<view class="device-list">
-				<view
-					v-for="device in devices"
-					:key="device.deviceId"
-					class="device-item"
-					:class="{ connected: connected && device.deviceId === bleService.getDeviceId() }"
-				>
-					<view class="device-icon">🔌</view>
-					<view class="device-info" @tap="connectDevice(device)">
-						<text class="device-name">{{ displayName(device) }}</text>
-						<text class="device-id">{{ device.deviceId }}</text>
-						<text class="device-rssi" v-if="device.RSSI">
-							信号: {{ device.RSSI }} dBm
-						</text>
+			<!-- 主仪表盘 - 输入电压/输入电流 -->
+			<view class="dashboard">
+				<view class="meter-card voltage-card">
+					<view class="meter-label">输入电压</view>
+					<view class="meter-value">
+						<text class="value-number">{{ powerData.V_in.toFixed(1) }}</text>
+						<text class="value-unit">V</text>
 					</view>
-					<view class="device-actions" v-if="connected && device.deviceId === bleService.getDeviceId()">
-						<text class="device-connected-label">已连接</text>
-						<text class="device-disconnect-btn" @tap.stop="disconnectDevice(device)">断开</text>
+					<view class="meter-bar">
+						<view class="meter-bar-fill voltage-fill" :style="{ width: voltagePercent + '%' }"></view>
 					</view>
-					<text class="device-connect" v-else @tap="connectDevice(device)">连接 ›</text>
 				</view>
-			</view>
-		</view>
 
-		<!-- 控制面板 (已连接时显示) -->
-		<view v-if="connected" class="control-panel" v-show="activeTab === 'control'">
-			<!-- 电源开关 -->
-			<view class="power-section">
-				<view class="power-toggle" :class="{ on: powerOn }" @tap="togglePower">
-					<text class="power-icon">{{ powerOn ? '⏻' : '⏻' }}</text>
-					<text class="power-label">{{ powerOn ? '开机' : '关机' }}</text>
-				</view>
-				<view class="power-status">
-					<text class="power-status-label">电源状态</text>
-					<text class="power-status-value" :class="{ on: powerOn }">
-						{{ powerOn ? '运行中' : '已关闭' }}
-					</text>
-				</view>
-			</view>
-
-			<!-- 电压控制 -->
-			<view class="control-section">
-				<view class="control-header">
-					<text class="control-label">输出电压</text>
-					<text class="control-value">{{ voltageSet.toFixed(2) }} V</text>
-				</view>
-				<slider
-					:min="0"
-					:max="voltageMax * 100"
-					:step="10"
-					:value="voltageSet * 100"
-					@change="onVoltageChange"
-					@changing="onVoltageChanging"
-					backgroundColor="#2a2a5e"
-					activeColor="#4fc3f7"
-					blockColor="#4fc3f7"
-					blockSize="28"
-				/>
-				<view class="slider-range">
-					<text>0.00V</text>
-					<text>{{ voltageMax.toFixed(1) }}V</text>
-				</view>
-			</view>
-
-			<!-- 电流控制 -->
-			<view class="control-section">
-				<view class="control-header">
-					<text class="control-label">输出电流</text>
-					<text class="control-value current">{{ currentSet.toFixed(2) }} A</text>
-				</view>
-				<slider
-					:min="0"
-					:max="currentMax * 100"
-					:step="50"
-					:value="currentSet * 100"
-					@change="onCurrentChange"
-					@changing="onCurrentChanging"
-					backgroundColor="#2a2a5e"
-					activeColor="#ff8a65"
-					blockColor="#ff8a65"
-					blockSize="28"
-				/>
-				<view class="slider-range">
-					<text>0.00A</text>
-					<text>{{ currentMax.toFixed(1) }}A</text>
-				</view>
-			</view>
-
-			<!-- 快速预设 -->
-			<view class="preset-section">
-				<text class="preset-title">快速预设</text>
-				<view class="preset-grid">
-					<view
-						v-for="preset in presets"
-						:key="preset.label"
-						class="preset-btn"
-						@tap="applyPreset(preset)"
-					>
-						<text class="preset-label">{{ preset.label }}</text>
-						<text class="preset-detail">{{ preset.voltage }}V / {{ preset.current }}A</text>
+				<view class="meter-card current-card">
+					<view class="meter-label">输入电流</view>
+					<view class="meter-value">
+						<text class="value-number">{{ powerData.I_in.toFixed(2) }}</text>
+						<text class="value-unit">A</text>
+					</view>
+					<view class="meter-bar">
+						<view class="meter-bar-fill current-fill" :style="{ width: currentPercent + '%' }"></view>
 					</view>
 				</view>
 			</view>
 
-			<!-- 操作按钮 -->
-			<view class="action-buttons">
-				<button class="action-btn danger" @tap="clearFaults">清除故障</button>
-				<button class="action-btn secondary" @tap="disconnect">断开连接</button>
+			<!-- 功率 & 电能合并大卡片 -->
+			<view class="power-energy-card">
+				<view class="pe-item">
+					<text class="pe-label">输入功率</text>
+					<text class="pe-value">{{ powerData.W_in.toFixed(1) }} <text class="pe-unit">W</text></text>
+				</view>
+				<view class="pe-divider"></view>
+				<view class="pe-item">
+					<text class="pe-label">累计输入电能</text>
+					<text class="pe-value">{{ powerData.E_in.toFixed(1) }} <text class="pe-unit">Wh</text></text>
+				</view>
 			</view>
-		</view>
 
-		<!-- 底部导航 -->
+			<!-- 温度 & 风扇区域 -->
+			<view class="env-row">
+				<!-- 温度卡片 -->
+				<view class="env-card temp-card-bg">
+					<view class="env-card-header">
+						<text class="env-card-icon">🌡️</text>
+						<text class="env-card-title">温度</text>
+					</view>
+					<view class="temp-ring-container">
+						<view
+							v-for="(temp, idx) in temperatures"
+							:key="idx"
+							class="temp-ring-item"
+						>
+							<view class="temp-ring">
+								<svg viewBox="0 0 36 36" class="temp-ring-svg">
+									<path class="temp-ring-bg"
+										d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+									/>
+									<path class="temp-ring-fill"
+										:class="tempRingClass(temp)"
+										:stroke-dasharray="tempRingDasharray(temp)"
+										d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+									/>
+								</svg>
+								<view class="temp-ring-text">
+									<text class="temp-ring-value" :class="{ hot: temp > 60 }">{{ temp.toFixed(1) }}</text>
+									<text class="temp-ring-unit">°C</text>
+								</view>
+							</view>
+							<text class="temp-ring-label">T{{ idx + 1 }}</text>
+						</view>
+					</view>
+				</view>
+
+				<!-- 风扇卡片 -->
+				<view class="env-card fan-card-bg">
+					<view class="env-card-header">
+						<text class="env-card-icon">🌀</text>
+						<text class="env-card-title">风扇</text>
+					</view>
+					<view class="fan-body">
+						<view class="fan-blade-container" :class="{ spinning: fanSpeed > 0 }">
+							<view class="fan-blade fan-blade-1"></view>
+							<view class="fan-blade fan-blade-2"></view>
+							<view class="fan-blade fan-blade-3"></view>
+							<view class="fan-hub"></view>
+						</view>
+						<view class="fan-info">
+							<text class="fan-speed">{{ fanSpeed.toFixed(0) }}</text>
+							<text class="fan-unit">RPM</text>
+						</view>
+					</view>
+				</view>
+			</view>
+
+				<!-- 转换效率（全宽） -->
+				<view class="efficiency-full-card">
+					<view class="env-card-header">
+						<text class="env-card-icon">📈</text>
+						<text class="env-card-title">转换效率</text>
+					</view>
+					<view class="efficiency-body">
+						<view class="efficiency-big-ring">
+							<svg viewBox="0 0 36 36" class="efficiency-ring-svg">
+								<path class="temp-ring-bg"
+									d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+								/>
+								<path class="efficiency-ring-fill"
+									:stroke-dasharray="efficiencyDasharray"
+									d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+								/>
+							</svg>
+							<view class="efficiency-ring-text">
+								<text class="efficiency-big-value">{{ efficiencyPercent }}</text>
+								<text class="efficiency-ring-unit">%</text>
+							</view>
+						</view>
+						<view class="efficiency-bars">
+							<view class="efficiency-bar-item">
+								<view class="efficiency-bar-label">
+									<text>输入功率</text>
+									<text class="efficiency-bar-val">{{ powerData.W_in.toFixed(1) }} W</text>
+								</view>
+								<view class="efficiency-bar-track">
+									<view class="efficiency-bar-fill efficiency-bar-in" :style="{ width: efficiencyBarIn + '%' }"></view>
+								</view>
+							</view>
+							<view class="efficiency-bar-item">
+								<view class="efficiency-bar-label">
+									<text>输出功率</text>
+									<text class="efficiency-bar-val">{{ powerData.W_out.toFixed(1) }} W</text>
+								</view>
+								<view class="efficiency-bar-track">
+									<view class="efficiency-bar-fill efficiency-bar-out" :style="{ width: efficiencyBarOut + '%' }"></view>
+								</view>
+							</view>
+						</view>
+					</view>
+				</view>
+
+				<!-- 实时数据曲线 -->
+				<view class="chart-card">
+					<view class="env-card-header">
+						<text class="env-card-icon">📉</text>
+						<text class="env-card-title">实时趋势</text>
+					</view>
+					<view class="chart-body">
+						<!-- 图例 -->
+						<view class="chart-legend">
+							<view class="chart-legend-item">
+								<view class="chart-legend-dot" style="background:#4fc3f7"></view>
+								<text class="chart-legend-label">电压</text>
+							</view>
+							<view class="chart-legend-item">
+								<view class="chart-legend-dot" style="background:#ff8a65"></view>
+								<text class="chart-legend-label">电流</text>
+							</view>
+							<view class="chart-legend-item">
+								<view class="chart-legend-dot" style="background:#ffd54f"></view>
+								<text class="chart-legend-label">功率</text>
+							</view>
+						</view>
+						<!-- SVG 曲线 -->
+						<view class="chart-svg-wrap">
+							<svg viewBox="0 0 300 60" class="chart-svg" v-if="hasChartData">
+								<!-- 网格线 -->
+								<line class="chart-gridline" x1="0" y1="15" x2="300" y2="15"/>
+								<line class="chart-gridline" x1="0" y1="30" x2="300" y2="30"/>
+								<line class="chart-gridline" x1="0" y1="45" x2="300" y2="45"/>
+								<!-- 折线 -->
+								<path class="chart-line chart-line-vout" :d="chartPathVout"/>
+								<path class="chart-line chart-line-iout" :d="chartPathIout"/>
+								<path class="chart-line chart-line-wout" :d="chartPathWout"/>
+							</svg>
+							<view v-else class="chart-empty">
+								<text class="chart-empty-text">等待数据...</text>
+							</view>
+						</view>
+					</view>
+				</view>
+			</view>
+
+			<!-- 底部导航 -->
 		<view class="bottom-nav">
 			<view class="nav-item" @tap="switchTab('index')">
-				<text class="nav-icon">📊</text>
-				<text class="nav-label">监控</text>
+				<text class="nav-icon">🏠</text>
+				<text class="nav-label">首页</text>
 			</view>
 			<view class="nav-item active" @tap="switchTab('control')">
-				<text class="nav-icon">🎛️</text>
-				<text class="nav-label">控制</text>
+				<text class="nav-icon">📊</text>
+				<text class="nav-label">监控</text>
 			</view>
 			<view class="nav-item" @tap="switchTab('settings')">
 				<text class="nav-icon">ℹ️</text>
@@ -170,216 +221,134 @@
 	export default {
 		data() {
 			return {
-				bleService,  // 暴露给模板使用
 				connected: false,
-				statusText: '未连接',
-				scanning: false,
-				devices: [],
-				activeTab: 'control',  // 'control' 或 'device'
-				powerOn: false,
-				voltageSet: 0,
-				currentSet: 0,
-				voltageMax: 12.0,
-				currentMax: 60.0,
-				presets: [
-					{ label: '低压小电流', voltage: 3.3, current: 1.0 },
-					{ label: '5V 2A', voltage: 5.0, current: 2.0 },
-					{ label: '12V 5A', voltage: 12.0, current: 5.0 },
-					{ label: '12V 10A', voltage: 12.0, current: 10.0 },
-					{ label: '12V 20A', voltage: 12.0, current: 20.0 },
-					{ label: '满载', voltage: 12.0, current: 60.0 }
-				]
+				powerData: {
+					V_out: 0, I_out: 0, V_in: 0, I_in: 0,
+					W_out: 0, W_in: 0, E_out: 0, E_in: 0,
+					temperature: [0, 0, 0],
+					fan_speed: 0,
+					power_on: 0,
+					device_online: false
+				},
+				voltageMax: 380.0,  // 输入电压范围 ~380V
+				currentMax: 5.0,     // 输入电流范围 ~5A
+				chartHistory: [],    // 实时曲线历史数据 [{t, V_out, I_out, W_out}]
+				chartMaxPoints: 40  // 最多保留40个点
 			}
 		},
 		onLoad() {
-			// 蓝牙已在 App.vue onLaunch 中全局初始化，此处不再重复调用
-
 			bleService.onStatus((status) => {
-				this.statusText = status
-				// 同步连接状态, 确保 UI 正确显示/隐藏控制面板
 				this.connected = bleService.connected
 			})
 
 			bleService.onData((data) => {
-				// 根据 ESP32 返回的实际数据更新 UI
-				// ESP32 的 power_on 字段基于 PMBus V_out 读取的真实状态
-				if (data.power_on !== undefined) {
-					this.powerOn = data.power_on === 1
-				}
 				if (data.V_out !== undefined) {
-					this.voltageSet = data.V_out
-				}
-				if (data.I_out !== undefined) {
-					this.currentSet = data.I_out
-				}
-				// 处理设置命令的确认响应，同步电源状态
-				if (data.ack === 'ok' && data.power !== undefined) {
-					this.powerOn = data.power === 1
+					this.powerData = { ...this.powerData, ...data }
+					// 推入曲线历史数据
+					this.chartHistory.push({
+						t: Date.now(),
+						V_out: data.V_out || 0,
+						I_out: data.I_out || 0,
+						W_out: data.W_out || 0
+					})
+					// 限制长度
+					if (this.chartHistory.length > this.chartMaxPoints) {
+						this.chartHistory = this.chartHistory.slice(-this.chartMaxPoints)
+					}
 				}
 			})
-
-			// 同步连接状态（连接状态变化由 ble-service.js 全局监听处理）
+		},
+		onShow() {
 			this.connected = bleService.connected
-			this.statusText = bleService.connected ? '已连接' : '未连接'
-			if (bleService.connected && this.devices.length === 0) {
-				this.devices.push({
-					deviceId: bleService._deviceId,
-					name: 'Dell-PSU-Controller',
-					RSSI: 0
-				})
+		},
+		computed: {
+			temperatures() {
+				return this.powerData.temperature || [0, 0, 0]
+			},
+			fanSpeed() {
+				const val = this.powerData.fan_speed
+				if (Array.isArray(val)) return val[0] || 0
+				return val || 0
+			},
+			voltagePercent() {
+				return Math.min((this.powerData.V_in / this.voltageMax) * 100, 100)
+			},
+			currentPercent() {
+				return Math.min((this.powerData.I_in / this.currentMax) * 100, 100)
+			},
+			tempRingClass() {
+				return (temp) => {
+					if (temp > 60) return 'hot'
+					if (temp > 40) return 'warm'
+					return 'cool'
+				}
+			},
+			tempRingDasharray() {
+				return (temp) => {
+					const maxTemp = 100
+					const pct = Math.min(temp / maxTemp, 1)
+					const circumference = 2 * Math.PI * 15.9155
+					return `${pct * circumference} ${circumference}`
+				}
+			},
+			efficiencyPercent() {
+				const win = this.powerData.W_in || 0
+				const wout = this.powerData.W_out || 0
+				if (win <= 0) return 0
+				return Math.min(Math.round((wout / win) * 100), 100)
+			},
+			efficiencyDasharray() {
+				const circumference = 2 * Math.PI * 15.9155
+				const pct = this.efficiencyPercent / 100
+				return `${pct * circumference} ${circumference}`
+			},
+			// 实时曲线 - 输出电压 SVG path
+			chartPathVout() {
+				return this._buildChartPath('V_out', 30, 0, '#4fc3f7')
+			},
+			// 实时曲线 - 输出电流 SVG path
+			chartPathIout() {
+				return this._buildChartPath('I_out', 3, 0, '#ff8a65')
+			},
+			// 实时曲线 - 输出功率 SVG path
+			chartPathWout() {
+				return this._buildChartPath('W_out', 100, 0, '#ffd54f')
+			},
+			// 是否有足够数据画图
+			hasChartData() {
+				return this.chartHistory.length >= 2
+			},
+			// 效率进度条 - 输入功率占比
+			efficiencyBarIn() {
+				const win = this.powerData.W_in || 0
+				const wout = this.powerData.W_out || 0
+				const max = Math.max(win, wout, 1)
+				return Math.min((win / max) * 100, 100)
+			},
+			// 效率进度条 - 输出功率占比
+			efficiencyBarOut() {
+				const win = this.powerData.W_in || 0
+				const wout = this.powerData.W_out || 0
+				const max = Math.max(win, wout, 1)
+				return Math.min((wout / max) * 100, 100)
 			}
 		},
-		onUnload() {
-			bleService.stopScan()
-		},
 		methods: {
-			displayName(device) {
-				if (!device.name || device.name === 'N/A' || device.name === 'null') {
-					return '未知设备'
-				}
-				return device.name
-			},
-
-			startScan() {
-				this.scanning = true
-
-				// 保留已连接的设备，不清空列表
-				const connectedId = bleService.getDeviceId()
-				const connectedDevices = connectedId
-					? this.devices.filter(d => d.deviceId === connectedId)
-					: []
-
-				bleService.startScan((device) => {
-					// 去重
-					const exists = this.devices.find(d => d.deviceId === device.deviceId)
-					if (!exists) {
-						this.devices.push(device)
-					}
+			// 构建 SVG 折线 path
+			_buildChartPath(key, maxVal, minVal, color) {
+				const data = this.chartHistory
+				if (data.length < 2) return ''
+				const w = 300, h = 60
+				const range = maxVal - minVal || 1
+				const stepX = w / (data.length - 1)
+				const points = data.map((d, i) => {
+					const x = i * stepX
+					const val = Math.min(Math.max(d[key] || 0, minVal), maxVal)
+					const y = h - ((val - minVal) / range) * h
+					return `${x},${y}`
 				})
-
-				// 5 秒后自动停止
-				setTimeout(() => {
-					bleService.stopScan()
-					this.scanning = false
-				}, 5000)
+				return `M${points.join(' L')}`
 			},
-
-			async connectDevice(device) {
-				uni.showLoading({ title: '连接中...' })
-				try {
-					bleService.stopScan()
-					this.scanning = false
-					await bleService.connect(device.deviceId)
-					this.connected = true
-					this.statusText = '已连接'
-					// 确保设备在列表中
-					const exists = this.devices.find(d => d.deviceId === device.deviceId)
-					if (!exists) {
-						this.devices.push(device)
-					}
-					uni.hideLoading()
-					uni.showToast({ title: '连接成功', icon: 'success' })
-					// 连接成功后主动请求数据, 确保 UI 立即更新
-					// ESP32 端也会自动推送, 但主动请求更可靠
-					setTimeout(() => {
-						bleService.getData().catch(err => {
-							console.error('[Control] 首次获取数据失败:', err)
-						})
-					}, 1000)
-				} catch (err) {
-					uni.hideLoading()
-					uni.showToast({ title: '连接失败', icon: 'error' })
-				}
-			},
-
-			async togglePower() {
-					try {
-						// 发送电源切换命令，不立即翻转状态
-						// 等待 ESP32 返回的确认响应（onData 中处理 ack 响应）来更新 UI
-						await bleService.setPower(!this.powerOn)
-						// 不立即翻转 this.powerOn，等待 ESP32 返回的实际 power_on 状态
-						// 实际状态会通过 onData 回调中的 data.power_on 或 data.ack.power 更新
-					} catch (err) {
-						uni.showToast({ title: '操作失败', icon: 'error' })
-					}
-				},
-
-			onVoltageChange(e) {
-				const value = e.detail.value / 100
-				this.voltageSet = value
-				this._sendVoltage(value)
-			},
-
-			onVoltageChanging(e) {
-				this.voltageSet = e.detail.value / 100
-			},
-
-			onCurrentChange(e) {
-				const value = e.detail.value / 100
-				this.currentSet = value
-				this._sendCurrent(value)
-			},
-
-			onCurrentChanging(e) {
-				this.currentSet = e.detail.value / 100
-			},
-
-			async _sendVoltage(value) {
-				try {
-					await bleService.setVoltage(value)
-				} catch (err) {
-					console.error('设定电压失败:', err)
-				}
-			},
-
-			async _sendCurrent(value) {
-				try {
-					await bleService.setCurrent(value)
-				} catch (err) {
-					console.error('设定电流失败:', err)
-				}
-			},
-
-			async applyPreset(preset) {
-				this.voltageSet = preset.voltage
-				this.currentSet = preset.current
-				try {
-					await bleService.setVoltage(preset.voltage)
-					await bleService.setCurrent(preset.current)
-					uni.showToast({ title: `已设为 ${preset.voltage}V/${preset.current}A`, icon: 'none' })
-				} catch (err) {
-					uni.showToast({ title: '设定失败', icon: 'error' })
-				}
-			},
-
-			async clearFaults() {
-				try {
-					await bleService.clearFaults()
-					uni.showToast({ title: '已清除故障', icon: 'success' })
-				} catch (err) {
-					uni.showToast({ title: '操作失败', icon: 'error' })
-				}
-			},
-
-			disconnect() {
-				bleService.disconnect()
-				this.connected = false
-				this.statusText = '已断开'
-				// 不清空设备列表，保留已连接过的设备记录
-			},
-
-			disconnectDevice(device) {
-				uni.showModal({
-					title: '断开连接',
-					content: `确定要断开 ${device.name || '设备'} 吗？`,
-					success: (res) => {
-						if (res.confirm) {
-							this.disconnect()
-						}
-					}
-				})
-			},
-
 			switchTab(tab) {
 				const urls = {
 					index: '/pages/index/index',
@@ -402,347 +371,591 @@
 	}
 
 	.container {
-		padding: 20rpx 30rpx 120rpx;
+		padding: 20rpx 28rpx 110rpx;
 		min-height: 100vh;
 	}
 
-	/* 标签切换栏 */
-	.tab-bar {
+	/* 未连接提示 */
+	.disconnected-hint {
 		display: flex;
-		background: linear-gradient(135deg, #1a1a3e, #16213e);
-		border-radius: 16rpx;
-		margin-bottom: 30rpx;
-		border: 1px solid #2a2a5e;
-		overflow: hidden;
-	}
-
-	.tab-item {
-		flex: 1;
-		display: flex;
+		flex-direction: column;
 		align-items: center;
 		justify-content: center;
-		padding: 20rpx;
-		gap: 10rpx;
-		opacity: 0.5;
-		transition: all 0.3s;
+		padding: 120rpx 0;
 	}
 
-	.tab-item.active {
-		opacity: 1;
-		background: rgba(79, 195, 247, 0.1);
-		border-bottom: 3px solid #4fc3f7;
+	.disconnected-icon {
+		font-size: 100rpx;
+		margin-bottom: 30rpx;
 	}
 
-	.tab-icon {
-		font-size: 32rpx;
-	}
-
-	.tab-label {
-		font-size: 28rpx;
-		font-weight: 500;
-	}
-
-	/* 扫描区域 */
-	.scan-header {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		margin-bottom: 24rpx;
-	}
-
-	.scan-title {
-		font-size: 32rpx;
+	.disconnected-text {
+		font-size: 36rpx;
 		font-weight: 600;
 		color: #e0e0e0;
+		margin-bottom: 16rpx;
 	}
 
-	.scan-btn {
+	.disconnected-sub {
 		font-size: 26rpx;
-		padding: 12rpx 32rpx;
+		color: #666;
+		margin-bottom: 40rpx;
+		text-align: center;
+	}
+
+	.goto-home-btn {
+		padding: 20rpx 60rpx;
 		background: linear-gradient(135deg, #4fc3f7, #0288d1);
 		color: #fff;
 		border-radius: 40rpx;
+		font-size: 28rpx;
 		border: none;
 	}
 
-	.scan-btn[disabled] {
-		opacity: 0.5;
-	}
-
-	.scanning-indicator {
-		text-align: center;
-		padding: 60rpx 0;
-	}
-
-	.scanning-text {
-		font-size: 28rpx;
-		color: #666;
-	}
-
-	.empty-state {
-		text-align: center;
-		padding: 80rpx 0;
-	}
-
-	.empty-icon {
-		font-size: 80rpx;
-		display: block;
-		margin-bottom: 20rpx;
-	}
-
-	.empty-text {
-		font-size: 26rpx;
-		color: #666;
-	}
-
-	.device-list {
+	/* 监控面板 */
+	.monitor-panel {
 		display: flex;
 		flex-direction: column;
-		gap: 16rpx;
+		gap: 10rpx;
 	}
 
-	.device-item {
+	/* 仪表盘卡片 */
+	.dashboard {
 		display: flex;
-		align-items: center;
+		gap: 20rpx;
+		margin-bottom: 14rpx;
+	}
+
+	.meter-card {
+		flex: 1;
 		background: linear-gradient(135deg, #1a1a3e, #16213e);
-		border-radius: 16rpx;
-		padding: 24rpx;
+		border-radius: 18rpx;
+		padding: 26rpx 28rpx;
 		border: 1px solid #2a2a5e;
 	}
 
-	.device-icon {
-		font-size: 40rpx;
-		margin-right: 20rpx;
+	.voltage-card {
+		border-color: #4fc3f7;
 	}
 
-	.device-info {
-		flex: 1;
+	.current-card {
+		border-color: #ff8a65;
 	}
 
-	.device-name {
-		font-size: 28rpx;
-		font-weight: 600;
-		color: #e0e0e0;
-		display: block;
-	}
-
-	.device-id {
-		font-size: 20rpx;
-		color: #555;
-		display: block;
-		margin-top: 4rpx;
-	}
-
-	.device-rssi {
-		font-size: 20rpx;
+	.meter-label {
+		font-size: 24rpx;
 		color: #888;
-		display: block;
-		margin-top: 4rpx;
+		margin-bottom: 10rpx;
 	}
 
-	.device-connect {
-		font-size: 28rpx;
+	.meter-value {
+		display: flex;
+		align-items: baseline;
+		margin-bottom: 14rpx;
+	}
+
+	.value-number {
+		font-size: 60rpx;
+		font-weight: 700;
+		color: #fff;
+		line-height: 1;
+	}
+
+	.voltage-card .value-number {
 		color: #4fc3f7;
 	}
 
-	.device-actions {
+	.current-card .value-number {
+		color: #ff8a65;
+	}
+
+	.value-unit {
+		font-size: 26rpx;
+		color: #888;
+		margin-left: 8rpx;
+	}
+
+	.meter-bar {
+		height: 8rpx;
+		background-color: #2a2a5e;
+		border-radius: 4rpx;
+		overflow: hidden;
+	}
+
+	.meter-bar-fill {
+		height: 100%;
+		border-radius: 4rpx;
+		transition: width 0.5s ease;
+	}
+
+	.voltage-fill {
+		background: linear-gradient(90deg, #4fc3f7, #0288d1);
+	}
+
+	.current-fill {
+		background: linear-gradient(90deg, #ff8a65, #d84315);
+	}
+
+	/* 功率&电能合并大卡片 */
+	.power-energy-card {
+		display: flex;
+		align-items: center;
+		background: linear-gradient(135deg, #1a1a3e, #16213e);
+		border-radius: 18rpx;
+		padding: 30rpx 28rpx;
+		border: 1px solid #ffd54f;
+		margin-bottom: 14rpx;
+	}
+
+	.pe-item {
+		flex: 1;
+		text-align: center;
+	}
+
+	.pe-label {
+		font-size: 24rpx;
+		color: #888;
+		display: block;
+		margin-bottom: 10rpx;
+	}
+
+	.pe-value {
+		font-size: 48rpx;
+		font-weight: 700;
+		color: #ffd54f;
+	}
+
+	.pe-unit {
+		font-size: 26rpx;
+		font-weight: 400;
+		color: #ffd54f;
+		opacity: 0.7;
+	}
+
+	.pe-divider {
+		width: 1px;
+		height: 70rpx;
+		background: rgba(255, 213, 79, 0.2);
+		margin: 0 20rpx;
+	}
+
+	/* 温度 & 风扇 - 双卡片布局 */
+	.env-row {
+		display: flex;
+		gap: 20rpx;
+		margin-bottom: 14rpx;
+	}
+
+	.env-card {
+		flex: 1;
+		background: linear-gradient(135deg, #1a1a3e, #16213e);
+		border-radius: 18rpx;
+		padding: 20rpx 22rpx;
+		border: 1px solid #2a2a5e;
+	}
+
+	.temp-card-bg {
+		border-color: #ff7043;
+	}
+
+	.fan-card-bg {
+		border-color: #4fc3f7;
+	}
+
+	.env-card-header {
+		display: flex;
+		align-items: center;
+		gap: 8rpx;
+		margin-bottom: 16rpx;
+	}
+
+	.env-card-icon {
+		font-size: 28rpx;
+	}
+
+	.env-card-title {
+		font-size: 24rpx;
+		font-weight: 600;
+		color: #ccc;
+	}
+
+	/* 温度环形进度条 */
+	.temp-ring-container {
+		display: flex;
+		justify-content: space-around;
+		gap: 8rpx;
+	}
+
+	.temp-ring-item {
 		display: flex;
 		flex-direction: column;
 		align-items: center;
 		gap: 8rpx;
 	}
 
-	.device-connected-label {
-		font-size: 22rpx;
-		color: #4caf50;
-		font-weight: 600;
-	}
-
-	.device-disconnect-btn {
-		font-size: 24rpx;
-		color: #ff5252;
-		padding: 8rpx 20rpx;
-		border: 1px solid #ff5252;
-		border-radius: 12rpx;
-		background: rgba(255, 82, 82, 0.1);
-	}
-
-	/* 控制面板 */
-	.control-panel {
-		display: flex;
-		flex-direction: column;
-		gap: 30rpx;
-	}
-
-	/* 电源开关 */
-	.power-section {
+	.temp-ring {
+		position: relative;
+		width: 92rpx;
+		height: 92rpx;
 		display: flex;
 		align-items: center;
-		gap: 30rpx;
-		background: linear-gradient(135deg, #1a1a3e, #16213e);
-		border-radius: 20rpx;
-		padding: 30rpx;
-		border: 1px solid #2a2a5e;
+		justify-content: center;
 	}
 
-	.power-toggle {
-		width: 120rpx;
-		height: 120rpx;
-		border-radius: 50%;
+	.temp-ring-svg {
+		width: 100%;
+		height: 100%;
+		transform: rotate(-90deg);
+	}
+
+	.temp-ring-bg {
+		fill: none;
+		stroke: #2a2a5e;
+		stroke-width: 2.5;
+	}
+
+	.temp-ring-fill {
+		fill: none;
+		stroke-width: 2.5;
+		stroke-linecap: round;
+		transition: stroke-dasharray 0.6s ease, stroke 0.3s ease;
+	}
+
+	.temp-ring-fill.cool {
+		stroke: #4fc3f7;
+	}
+
+	.temp-ring-fill.warm {
+		stroke: #ffd54f;
+	}
+
+	.temp-ring-fill.hot {
+		stroke: #ff5252;
+	}
+
+	.temp-ring-text {
+		position: absolute;
 		display: flex;
 		flex-direction: column;
 		align-items: center;
 		justify-content: center;
-		background: #2a2a5e;
-		border: 2px solid #3a3a6e;
-		transition: all 0.3s;
 	}
 
-	.power-toggle.on {
-		background: rgba(0, 230, 118, 0.15);
-		border-color: #00e676;
-		box-shadow: 0 0 20rpx rgba(0, 230, 118, 0.3);
+	.temp-ring-value {
+		font-size: 26rpx;
+		font-weight: 700;
+		color: #e0e0e0;
+		line-height: 1.1;
 	}
 
-	.power-icon {
-		font-size: 40rpx;
+	.temp-ring-value.hot {
+		color: #ff5252;
 	}
 
-	.power-label {
-		font-size: 18rpx;
+	.temp-ring-unit {
+		font-size: 16rpx;
 		color: #888;
-		margin-top: 4rpx;
+		line-height: 1;
 	}
 
-	.power-toggle.on .power-label {
-		color: #00e676;
-	}
-
-	.power-status {
-		flex: 1;
-	}
-
-	.power-status-label {
-		font-size: 24rpx;
-		color: #888;
-		display: block;
-		margin-bottom: 8rpx;
-	}
-
-	.power-status-value {
-		font-size: 36rpx;
-		font-weight: 600;
+	.temp-ring-label {
+		font-size: 20rpx;
 		color: #666;
 	}
 
-	.power-status-value.on {
-		color: #00e676;
-	}
-
-	/* 控制滑块区域 */
-	.control-section {
-		background: linear-gradient(135deg, #1a1a3e, #16213e);
-		border-radius: 20rpx;
-		padding: 30rpx;
-		border: 1px solid #2a2a5e;
-	}
-
-	.control-header {
+	/* 风扇动画 */
+	.fan-body {
 		display: flex;
-		justify-content: space-between;
+		flex-direction: column;
 		align-items: center;
-		margin-bottom: 16rpx;
+		gap: 14rpx;
+		padding: 6rpx 0;
 	}
 
-	.control-label {
-		font-size: 26rpx;
-		color: #888;
+	.fan-blade-container {
+		position: relative;
+		width: 110rpx;
+		height: 110rpx;
+		display: flex;
+		align-items: center;
+		justify-content: center;
 	}
 
-	.control-value {
-		font-size: 36rpx;
+	.fan-blade-container.spinning {
+		animation: fanSpin 1.2s linear infinite;
+	}
+
+	.fan-blade-container.spinning .fan-blade-1 {
+		animation: fanBlade1 1.2s ease-in-out infinite;
+	}
+
+	.fan-blade-container.spinning .fan-blade-2 {
+		animation: fanBlade2 1.2s ease-in-out infinite;
+	}
+
+	.fan-blade-container.spinning .fan-blade-3 {
+		animation: fanBlade3 1.2s ease-in-out infinite;
+	}
+
+	.fan-blade {
+		position: absolute;
+		width: 36rpx;
+		height: 50rpx;
+		background: linear-gradient(180deg, rgba(79, 195, 247, 0.9), rgba(2, 136, 209, 0.6));
+		border-radius: 50% 50% 20% 20%;
+		transform-origin: center 55rpx;
+		opacity: 0.85;
+	}
+
+	.fan-blade-1 {
+		transform: rotate(0deg) translateY(-28rpx);
+	}
+
+	.fan-blade-2 {
+		transform: rotate(120deg) translateY(-28rpx);
+	}
+
+	.fan-blade-3 {
+		transform: rotate(240deg) translateY(-28rpx);
+	}
+
+	.fan-hub {
+		width: 22rpx;
+		height: 22rpx;
+		border-radius: 50%;
+		background: radial-gradient(circle, #4fc3f7, #0288d1);
+		z-index: 2;
+		box-shadow: 0 0 12rpx rgba(79, 195, 247, 0.5);
+	}
+
+	.fan-info {
+		display: flex;
+		align-items: baseline;
+		gap: 6rpx;
+	}
+
+	.fan-speed {
+		font-size: 42rpx;
 		font-weight: 700;
 		color: #4fc3f7;
 	}
 
-	.control-value.current {
-		color: #ff8a65;
+	.fan-unit {
+		font-size: 22rpx;
+		color: #888;
 	}
 
-	.slider-range {
+	@keyframes fanSpin {
+		0% { transform: rotate(0deg); }
+		100% { transform: rotate(360deg); }
+	}
+
+	@keyframes fanBlade1 {
+		0%, 100% { opacity: 0.85; transform: rotate(0deg) translateY(-28rpx); }
+		50% { opacity: 1; transform: rotate(5deg) translateY(-30rpx); }
+	}
+
+	@keyframes fanBlade2 {
+		0%, 100% { opacity: 0.85; transform: rotate(120deg) translateY(-28rpx); }
+		50% { opacity: 1; transform: rotate(125deg) translateY(-30rpx); }
+	}
+
+	@keyframes fanBlade3 {
+		0%, 100% { opacity: 0.85; transform: rotate(240deg) translateY(-28rpx); }
+		50% { opacity: 1; transform: rotate(245deg) translateY(-30rpx); }
+	}
+
+	/* 转换效率全宽卡片 */
+	.efficiency-full-card {
+		background: linear-gradient(135deg, #1a1a3e, #16213e);
+		border-radius: 18rpx;
+		padding: 22rpx 26rpx;
+		border: 1px solid #ffd54f;
+		margin-bottom: 14rpx;
+	}
+
+	.efficiency-body {
+		display: flex;
+		align-items: center;
+		gap: 24rpx;
+	}
+
+	.efficiency-big-ring {
+		flex-shrink: 0;
+		position: relative;
+		width: 116rpx;
+		height: 116rpx;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.efficiency-ring-svg {
+		width: 100%;
+		height: 100%;
+		transform: rotate(-90deg);
+	}
+
+	.efficiency-ring-fill {
+		fill: none;
+		stroke: #ffd54f;
+		stroke-width: 3;
+		stroke-linecap: round;
+		transition: stroke-dasharray 0.6s ease;
+	}
+
+	.efficiency-ring-text {
+		position: absolute;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.efficiency-big-value {
+		font-size: 32rpx;
+		font-weight: 700;
+		color: #ffd54f;
+		line-height: 1.1;
+	}
+
+	.efficiency-ring-unit {
+		font-size: 18rpx;
+		color: #888;
+		line-height: 1;
+	}
+
+	/* 效率对比进度条 */
+	.efficiency-bars {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		gap: 12rpx;
+	}
+
+	.efficiency-bar-item {
+		display: flex;
+		flex-direction: column;
+		gap: 6rpx;
+	}
+
+	.efficiency-bar-label {
 		display: flex;
 		justify-content: space-between;
-		font-size: 20rpx;
-		color: #555;
-		margin-top: 8rpx;
+		font-size: 22rpx;
+		color: #888;
 	}
 
-	/* 预设 */
-	.preset-section {
+	.efficiency-bar-val {
+		font-weight: 600;
+		color: #ccc;
+	}
+
+	.efficiency-bar-track {
+		height: 12rpx;
+		background: rgba(255, 255, 255, 0.05);
+		border-radius: 6rpx;
+		overflow: hidden;
+	}
+
+	.efficiency-bar-fill {
+		height: 100%;
+		border-radius: 6rpx;
+		transition: width 0.5s ease;
+	}
+
+	.efficiency-bar-in {
+		background: linear-gradient(90deg, #4fc3f7, #0288d1);
+	}
+
+	.efficiency-bar-out {
+		background: linear-gradient(90deg, #ffd54f, #ff8f00);
+	}
+	/* 实时数据曲线卡片 */
+	.chart-card {
 		background: linear-gradient(135deg, #1a1a3e, #16213e);
-		border-radius: 20rpx;
-		padding: 30rpx;
-		border: 1px solid #2a2a5e;
+		border-radius: 18rpx;
+		padding: 20rpx 24rpx;
+		border: 1px solid #7c4dff;
+		margin-bottom: 14rpx;
 	}
 
-	.preset-title {
-		font-size: 26rpx;
-		color: #888;
-		display: block;
-		margin-bottom: 20rpx;
+	.chart-body {
+		display: flex;
+		flex-direction: column;
+		gap: 10rpx;
 	}
 
-	.preset-grid {
-		display: grid;
-		grid-template-columns: repeat(3, 1fr);
-		gap: 16rpx;
-	}
-
-	.preset-btn {
-		background: #2a2a5e;
-		border-radius: 12rpx;
-		padding: 20rpx 12rpx;
-		text-align: center;
-		border: 1px solid #3a3a6e;
-	}
-
-	.preset-label {
-		font-size: 24rpx;
-		color: #e0e0e0;
-		display: block;
-		margin-bottom: 6rpx;
-	}
-
-	.preset-detail {
-		font-size: 20rpx;
-		color: #888;
-	}
-
-	/* 操作按钮 */
-	.action-buttons {
+	.chart-legend {
 		display: flex;
 		gap: 20rpx;
+		justify-content: center;
 	}
 
-	.action-btn {
-		flex: 1;
-		padding: 24rpx;
-		border-radius: 16rpx;
-		font-size: 28rpx;
-		text-align: center;
-		border: none;
+	.chart-legend-item {
+		display: flex;
+		align-items: center;
+		gap: 6rpx;
 	}
 
-	.action-btn.danger {
-		background: rgba(255, 82, 82, 0.15);
-		color: #ff5252;
-		border: 1px solid rgba(255, 82, 82, 0.3);
+	.chart-legend-dot {
+		width: 12rpx;
+		height: 12rpx;
+		border-radius: 50%;
 	}
 
-	.action-btn.secondary {
-		background: #2a2a5e;
+	.chart-legend-label {
+		font-size: 20rpx;
 		color: #888;
-		border: 1px solid #3a3a6e;
+	}
+
+	.chart-svg-wrap {
+		width: 100%;
+		height: 130rpx;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.chart-svg {
+		width: 100%;
+		height: 100%;
+	}
+
+	.chart-gridline {
+		stroke: rgba(255, 255, 255, 0.04);
+		stroke-width: 1;
+	}
+
+	.chart-line {
+		fill: none;
+		stroke-width: 2;
+		stroke-linejoin: round;
+		stroke-linecap: round;
+	}
+
+	.chart-line-vout {
+		stroke: #4fc3f7;
+	}
+
+	.chart-line-iout {
+		stroke: #ff8a65;
+	}
+
+	.chart-line-wout {
+		stroke: #ffd54f;
+	}
+
+	.chart-empty {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		height: 100%;
+	}
+
+	.chart-empty-text {
+		font-size: 22rpx;
+		color: #555;
 	}
 
 	/* 底部导航 */

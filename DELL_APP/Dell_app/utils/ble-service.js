@@ -28,11 +28,14 @@ class BleService {
     this._connected = false
     this._onDataCallback = null
     this._onStatusCallback = null
+    this._onDeviceListCallback = null  // 设备列表变化回调
     this._receiveBuffer = ''
     this._initialized = false  // 防止重复初始化
     this._connectionStateChangeRegistered = false  // 防止重复注册连接状态监听
     this._lastData = null  // 缓存最后一条数据，用于新页面注册时立即回掉
     this._deviceInfo = null  // 缓存设备信息（连接成功后自动获取一次，固定不变）
+    this._devices = []  // 扫描到的设备列表 [{deviceId, name, RSSI}]
+    this._scanning = false  // 是否正在扫描
 
     // ---------- 累计电能计算 (App 端积分, 不依赖 PMBus E_in/E_out 寄存器) ----------
     this._energyData = {
@@ -99,18 +102,27 @@ class BleService {
 
   /**
    * 开始扫描 BLE 设备
-   * @param {Function} onFound 发现设备回调 (device)
+   * @param {Function} onFound 发现设备回调 (device) - 可选，兼容旧用法
    */
   startScan(onFound) {
     // #ifdef APP-PLUS
+    if (this._scanning) {
+      console.log('[BLE] 已在扫描中，跳过')
+      return
+    }
+    this._scanning = true
+    this._devices = []  // 清空设备列表
+    this._notifyDeviceList()  // 通知空列表
+
     uni.startBluetoothDevicesDiscovery({
-      allowDuplicatesKey: true,
+      allowDuplicatesKey: false,  // 不重复上报，减少重复
       success: () => {
         console.log('[BLE] 开始扫描设备')
         this._notifyStatus('正在扫描...')
       },
       fail: (err) => {
         console.error('[BLE] 扫描失败:', err)
+        this._scanning = false
         this._notifyStatus('扫描失败')
       }
     })
@@ -118,6 +130,7 @@ class BleService {
     // 监听发现设备
     uni.onBluetoothDeviceFound((res) => {
       const devices = res.devices
+      let changed = false
       for (const device of devices) {
         // 调试日志: 打印每个发现的设备
         console.log('[BLE] 发现设备:', JSON.stringify({
@@ -133,13 +146,63 @@ class BleService {
             uuid.toUpperCase() === BLE_SERVICE_UUID
           )
 
-        // 只显示匹配 NUS 服务 UUID 的设备 (Dell-PSU-Controller)
-        if (hasNusService) {
-          onFound && onFound(device)
+        if (!hasNusService) continue
+
+        // 去重：检查设备是否已在列表中
+        const existing = this._devices.find(d => d.deviceId === device.deviceId)
+        if (existing) {
+          // 更新 RSSI
+          existing.RSSI = device.RSSI
+        } else {
+          // 添加新设备
+          this._devices.push({
+            deviceId: device.deviceId,
+            name: device.name || '未知设备',
+            RSSI: device.RSSI
+          })
+          changed = true
         }
       }
+      if (changed) {
+        this._notifyDeviceList()
+      }
+      // 兼容旧用法：onFound 回调
+      onFound && onFound(device)
     })
     // #endif
+  }
+
+  /**
+   * 获取当前扫描到的设备列表
+   */
+  getDeviceList() {
+    return [...this._devices]
+  }
+
+  /**
+   * 注册设备列表变化回调
+   * @param {Function} callback 回调函数 (devices)
+   */
+  onDeviceList(callback) {
+    this._onDeviceListCallback = callback
+    // 立即回调当前列表
+    if (this._devices.length > 0) {
+      callback([...this._devices])
+    }
+  }
+
+  /**
+   * 通知设备列表变化
+   */
+  _notifyDeviceList() {
+    this._onDeviceListCallback && this._onDeviceListCallback([...this._devices])
+  }
+
+  /**
+   * 是否正在扫描
+   */
+  get scanning() {
+    return this._scanning
   }
 
   /**
@@ -147,6 +210,7 @@ class BleService {
    */
   stopScan() {
     // #ifdef APP-PLUS
+    this._scanning = false
     uni.stopBluetoothDevicesDiscovery({
       success: () => {
         console.log('[BLE] 停止扫描')

@@ -93,12 +93,12 @@
 		<!-- 底部导航 -->
 		<view class="bottom-nav">
 			<view class="nav-item" @tap="switchTab('index')">
-				<text class="nav-icon">📊</text>
-				<text class="nav-label">监控</text>
+				<text class="nav-icon">🏠</text>
+				<text class="nav-label">首页</text>
 			</view>
 			<view class="nav-item" @tap="switchTab('control')">
-				<text class="nav-icon">🎛️</text>
-				<text class="nav-label">控制</text>
+				<text class="nav-icon">📊</text>
+				<text class="nav-label">监控</text>
 			</view>
 			<view class="nav-item active" @tap="switchTab('settings')">
 				<text class="nav-icon">ℹ️</text>
