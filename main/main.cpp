@@ -3,6 +3,11 @@
  *
  * ESP32-C3 (ESP-IDF 框架)
  *
+ * 架构: FreeRTOS 多任务并发
+ *   - task_hardware_poll: 硬件轮询 (PMBus + ADC), 500ms 周期, 优先级 2
+ *   - task_ui_and_buttons: UI 与按键处理, 50ms 周期, 优先级 3
+ *   - app_main (BLE Task): BLE 状态监控与数据推送, 100ms 周期
+ *
  * 安全开机时序 (setup):
  *   1. SW_CTRL = LOW (切断电源输出)
  *   2. V_PWM = 最高占空比 (3.0V DAC → 0V 输出), I_PWM = 0
@@ -43,6 +48,10 @@ static void handle_buttons(void);
 static const char* build_full_data_json(void);
 static void send_response(const char* json);
 
+// FreeRTOS 任务函数前向声明
+static void task_hardware_poll(void *pvParameters);
+static void task_ui_and_buttons(void *pvParameters);
+
 // 全局 JSON 缓冲区 (BLE 发送用)
 static char g_respBuf[1024];
 
@@ -61,7 +70,7 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, " Platform: ESP32-C3");
     ESP_LOGI(TAG, "========================================");
 
-    // ========== 安全开机时序 ==========
+    // ========== 安全开机时序 (严禁修改) ==========
 
     // 第一步: 锁定命门 - SW_CTRL 输出 LOW, V_PWM 最高占空比, I_PWM = 0
     ESP_LOGI(TAG, "[BOOT SEQ] Step 1: Locking SW_CTRL LOW, setting PWM safe bias...");
@@ -95,29 +104,51 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Starting NimBLE host task...");
     nimble_port_freertos_init(nimble_host_task);
 
+    // ========== 创建 FreeRTOS 任务 ==========
+
+    // 创建硬件轮询任务 (PMBus + ADC), 500ms 周期, 优先级 2
+    BaseType_t taskCreated;
+    taskCreated = xTaskCreate(
+        task_hardware_poll,
+        "hw_poll",
+        4096,       // 栈空间 4096
+        NULL,       // 参数
+        2,          // 优先级 2
+        NULL        // 任务句柄 (不需要)
+    );
+    if (taskCreated != pdPASS) {
+        ESP_LOGE(TAG, "FATAL: Failed to create hardware poll task!");
+        while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+    }
+    ESP_LOGI(TAG, "Hardware poll task created (prio=2, stack=4096)");
+
+    // 创建 UI 与按键任务, 50ms 周期, 优先级 3
+    taskCreated = xTaskCreate(
+        task_ui_and_buttons,
+        "ui_btn",
+        4096,       // 栈空间 4096
+        NULL,       // 参数
+        3,          // 优先级 3 (高于硬件轮询, 确保交互不卡顿)
+        NULL        // 任务句柄 (不需要)
+    );
+    if (taskCreated != pdPASS) {
+        ESP_LOGE(TAG, "FATAL: Failed to create UI/button task!");
+        while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+    }
+    ESP_LOGI(TAG, "UI/button task created (prio=3, stack=4096)");
+
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, " System ready. Advertising as '%s'", BLE_DEVICE_NAME);
     ESP_LOGI(TAG, " Waiting for BLE connection...");
     ESP_LOGI(TAG, "========================================");
 
-    // ========== 主循环 ==========
+    // ========== 主循环 (BLE Task) ==========
+    // 只保留 BLE 状态监控和定时数据推送逻辑
     uint64_t lastDataPush = 0;
-    uint64_t lastLcdUpdate = 0;
     bool firstDataSent = false;
     bool wasConnected = false;
 
-    // 如果显示屏初始化成功，显示启动画面（纯色填充）
-    if (lcd_display_is_initialized()) {
-        // 分配一个简单的帧缓冲区用于测试显示
-        // 注意: 240*320*2 = 153600 字节，对于 ESP32-C3 来说较大
-        // 这里先不做复杂显示，仅作为驱动验证
-        ESP_LOGI(TAG, "LCD display ready for updates");
-    }
-
     while (1) {
-        // 按键处理
-        handle_buttons();
-
         uint64_t now = esp_timer_get_time() / 1000; // ms
         bool isConnected = ble_server_is_connected();
 
@@ -145,35 +176,76 @@ extern "C" void app_main(void)
 
             if (shouldPush) {
                 lastDataPush = now;
-
-                // 扫描 PMBus 数据
-                PMBus::scan();
-
-                // ADC 采样
-                ADCSampler::sample();
-
-                // 构建并发送数据
+                // 构建并发送数据 (数据由 task_hardware_poll 持续更新)
                 const char* json = build_full_data_json();
                 send_response(json);
             }
         } else {
-            // 未连接时, 每2秒扫描一次 PMBus (保持数据更新)
+            // 未连接时, 重置首包标记
             firstDataSent = false;
-            if ((now - lastDataPush) >= 2000) {
-                lastDataPush = now;
-                PMBus::scan();
-                ADCSampler::sample();
-            }
         }
 
+        vTaskDelay(pdMS_TO_TICKS(100)); // 100ms 循环周期
+    }
+}
+
+// ==================== FreeRTOS 任务函数 ====================
+
+/**
+ * task_hardware_poll - 硬件轮询任务
+ *
+ * 职责: 按固定周期轮询 PMBus 和 ADC 采样
+ * 周期: 500ms
+ * 优先级: 2
+ */
+static void task_hardware_poll(void *pvParameters)
+{
+    ESP_LOGI(TAG, "[HW_POLL] Task started");
+
+    while (1) {
+        // 扫描 PMBus 数据
+        PMBus::scan();
+
+        // ADC 采样
+        ADCSampler::sample();
+
+        // 500ms 轮询一次
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
+
+/**
+ * task_ui_and_buttons - UI 与按键任务
+ *
+ * 职责: 处理按键输入, 更新 LCD 显示
+ * 周期: 50ms (保证按键跟手)
+ * 优先级: 3 (高于硬件轮询, 确保交互不卡顿)
+ */
+static void task_ui_and_buttons(void *pvParameters)
+{
+    ESP_LOGI(TAG, "[UI_BTN] Task started");
+
+    uint64_t lastLcdUpdate = 0;
+
+    // 如果显示屏初始化成功，显示启动画面（纯色填充）
+    if (lcd_display_is_initialized()) {
+        ESP_LOGI(TAG, "LCD display ready for updates");
+    }
+
+    while (1) {
+        // 按键处理
+        handle_buttons();
+
         // 每 2 秒更新一次显示屏（如果已初始化）
+        uint64_t now = esp_timer_get_time() / 1000; // ms
         if (lcd_display_is_initialized() && (now - lastLcdUpdate) >= 2000) {
             lastLcdUpdate = now;
             // TODO: 后续可添加 LVGL 或自定义图形渲染
             // 当前仅保持驱动可用，显示内容后续实现
         }
 
-        vTaskDelay(pdMS_TO_TICKS(100)); // 100ms 循环周期
+        // 50ms 轮询一次按键，保证极致跟手
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
@@ -313,9 +385,7 @@ static void on_ble_rx(const char* data, int len)
     // ---------- 处理命令 ----------
 
     if (strcmp(cmd, "get_data") == 0) {
-        // 扫描 PMBus 并返回完整数据
-        PMBus::scan();
-        ADCSampler::sample();
+        // 返回当前最新数据 (由 task_hardware_poll 持续更新)
         const char* json = build_full_data_json();
         send_response(json);
     }
