@@ -6,6 +6,7 @@
  */
 #include "ble_server.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "nvs_flash.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
@@ -15,6 +16,7 @@
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 #include <cstring>
+#include <cstdio>
 
 static const char* TAG = "BLE_Server";
 
@@ -40,6 +42,9 @@ static uint16_t g_tx_val_handle = 0;
 static bool     g_connected     = false;
 static bool     g_synced        = false;
 static ble_rx_callback_t g_rx_callback = nullptr;
+
+// 设备名称缓冲区 (基础名称 + MAC 后3字节, 如 "Dell-PSU-Controller-A1B2C3")
+static char g_device_name[64];
 
 // BLE 发送互斥锁: 防止多个发送操作的分片在 BLE 栈中交错
 // 主循环推送 get_data 和 on_ble_rx 响应 get_info 可能同时调用 ble_server_send
@@ -117,6 +122,21 @@ esp_err_t ble_server_init(void)
         }
     }
 
+    // 构建设备名称: 基础名称 + "-" + MAC 后 3 字节
+    {
+        uint8_t mac[6];
+        esp_err_t err = esp_read_mac(mac, ESP_MAC_BT);
+        if (err == ESP_OK) {
+            snprintf(g_device_name, sizeof(g_device_name),
+                     "%s-%02X%02X%02X",
+                     BLE_DEVICE_NAME, mac[3], mac[4], mac[5]);
+        } else {
+            // 读取 MAC 失败, 回退到无后缀名称
+            snprintf(g_device_name, sizeof(g_device_name), "%s", BLE_DEVICE_NAME);
+        }
+        ESP_LOGI(TAG, "Device name: %s", g_device_name);
+    }
+
     // 初始化标准 GAP 和 GATT 服务
     ble_svc_gap_init();
     ble_svc_gatt_init();
@@ -135,8 +155,8 @@ esp_err_t ble_server_init(void)
         return ESP_FAIL;
     }
 
-    // 设置设备名称（使用默认宏，不带 MAC 后缀）
-    rc = ble_svc_gap_device_name_set(BLE_DEVICE_NAME);
+    // 设置设备名称（基础名称 + MAC 后 3 字节后缀，便于区分同型号设备）
+    rc = ble_svc_gap_device_name_set(g_device_name);
     if (rc != 0) {
         ESP_LOGW(TAG, "Device name set failed: %d", rc);
     }
@@ -266,6 +286,11 @@ void ble_server_set_rx_callback(ble_rx_callback_t cb)
     g_rx_callback = cb;
 }
 
+const char* ble_server_get_device_name(void)
+{
+    return g_device_name;
+}
+
 // ---------- 静态函数 ----------
 
 static void ble_advertise(void)
@@ -281,8 +306,8 @@ static void ble_advertise(void)
     advFields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
 
     // 添加设备名称到广播包
-    advFields.name = (uint8_t*)BLE_DEVICE_NAME;
-    advFields.name_len = strlen(BLE_DEVICE_NAME);
+    advFields.name = (uint8_t*)g_device_name;
+    advFields.name_len = strlen(g_device_name);
     advFields.name_is_complete = 1;
 
     rc = ble_gap_adv_set_fields(&advFields);

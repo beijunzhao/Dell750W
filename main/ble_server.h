@@ -34,6 +34,9 @@ esp_err_t ble_server_send(const char* data);
 /** 检查是否有客户端已连接 */
 bool ble_server_is_connected(void);
 
+/** 获取当前设备广播名称 (含 MAC 后缀) */
+const char* ble_server_get_device_name(void);
+
 /**
  * 设置接收数据回调
  * @param cb 回调函数 (data, len)

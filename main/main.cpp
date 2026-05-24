@@ -138,7 +138,7 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "UI/button task created (prio=3, stack=4096)");
 
     ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, " System ready. Advertising as '%s'", BLE_DEVICE_NAME);
+    ESP_LOGI(TAG, " System ready. Advertising as '%s'", ble_server_get_device_name());
     ESP_LOGI(TAG, " Waiting for BLE connection...");
     ESP_LOGI(TAG, "========================================");
 
