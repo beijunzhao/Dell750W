@@ -24,16 +24,17 @@
 				</view>
 
 				<!-- 已连接时显示当前设备信息和断开按钮 -->
-				<view v-if="connected" class="ble-connected-info">
-					<view class="ble-connected-device">
-						<text class="ble-connected-icon">📡</text>
-						<view class="ble-connected-detail">
-							<text class="ble-connected-name">{{ bleConnectedName || '已连接设备' }}</text>
-							<text class="ble-connected-status">已连接</text>
+					<view v-if="connected" class="ble-connected-info">
+						<view class="ble-connected-device">
+							<text class="ble-connected-icon">📡</text>
+							<view class="ble-connected-detail">
+								<text class="ble-connected-name">{{ bleConnectedName || '已连接设备' }}</text>
+								<text class="ble-connected-status">已连接</text>
+							</view>
 						</view>
+						<view class="ble-btn ble-btn-disconnect" @tap="disconnectDevice">断开连接</view>
 					</view>
-					<view class="ble-btn ble-btn-disconnect" @tap="disconnectDevice">断开连接</view>
-				</view>
+	
 
 				<!-- 扫描状态 -->
 				<view v-if="!connected" class="ble-scan-status">
@@ -315,16 +316,7 @@
 				this.statusText = status
 				this.connected = bleService.connected
 				if (this.connected) {
-					const deviceId = bleService.getDeviceId()
-					this.bleConnectedName = bleService.getDeviceList().find(d => d.deviceId === deviceId)?.name
-					if (!this.bleConnectedName) {
-						try {
-							const stored = uni.getStorageSync('ble_last_device')
-							this.bleConnectedName = (stored && stored.deviceId === deviceId) ? (stored.name || '已连接设备') : '已连接设备'
-						} catch (e) {
-							this.bleConnectedName = '已连接设备'
-						}
-					}
+					this._updateBleConnectedName()
 				}
 			})
 
@@ -367,21 +359,7 @@
 			this.connected = bleService.connected
 			this.statusText = bleService.connected ? '已连接' : '点击连接设备'
 			if (this.connected) {
-				const deviceId = bleService.getDeviceId()
-				this.bleConnectedName = bleService.getDeviceList().find(d => d.deviceId === deviceId)?.name
-				// 如果设备列表中没有（自动重连时可能还没扫描），尝试从本地存储读取
-				if (!this.bleConnectedName) {
-					try {
-						const stored = uni.getStorageSync('ble_last_device')
-						if (stored && stored.deviceId === deviceId) {
-							this.bleConnectedName = stored.name || '已连接设备'
-						} else {
-							this.bleConnectedName = '已连接设备'
-						}
-					} catch (e) {
-						this.bleConnectedName = '已连接设备'
-					}
-				}
+				this._updateBleConnectedName()
 			}
 		},
 		onUnload() {
@@ -425,6 +403,38 @@
 			}
 		},
 		methods: {
+			/**
+			 * 更新已连接设备的显示名称
+			 * 优先从本地存储（rename 保存的），其次设备列表，最后用 deviceId 后几位
+			 */
+			_updateBleConnectedName() {
+				const deviceId = bleService.getDeviceId()
+				if (!deviceId) {
+					this.bleConnectedName = '已连接设备'
+					return
+				}
+				// 1. 优先从本地存储读取（通过 rename 保存的，最可靠）
+				try {
+					const stored = uni.getStorageSync('ble_last_device')
+					if (stored && stored.deviceId === deviceId && stored.name && stored.name.trim().length > 0) {
+						this.bleConnectedName = stored.name.trim()
+						return
+					}
+				} catch (e) {}
+				// 2. 从设备列表中查找（扫描到的设备名，可能有乱码）
+				const found = bleService.getDeviceList().find(d => d.deviceId === deviceId)
+				if (found && found.name && found.name.trim().length > 0) {
+					this.bleConnectedName = found.name.trim()
+					return
+				}
+				// 3. 用 deviceId 后 8 位
+				if (deviceId.length > 8) {
+					this.bleConnectedName = '设备(' + deviceId.substring(deviceId.length - 8).toUpperCase() + ')'
+				} else {
+					this.bleConnectedName = '已连接设备'
+				}
+			},
+
 			switchTab(tab) {
 				const urls = {
 					index: '/pages/index/index',
@@ -587,7 +597,7 @@
 				this.showBleModal = true
 				// 如果已连接，直接显示已连接信息
 				if (this.connected) {
-					this.bleConnectedName = bleService.getDeviceList().find(d => d.deviceId === bleService.getDeviceId())?.name || '已连接设备'
+					this._updateBleConnectedName()
 					return
 				}
 				// 未连接时，初始化蓝牙并开始扫描
@@ -651,7 +661,7 @@
 			},
 
 			/**
-			 * 断开当前设备连接
+				* 断开当前设备连接
 			 */
 			disconnectDevice() {
 				uni.showModal({

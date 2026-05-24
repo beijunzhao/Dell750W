@@ -36,7 +36,7 @@ class BleService {
     this._initialized = false  // 防止重复初始化
     this._connectionStateChangeRegistered = false  // 防止重复注册连接状态监听
     this._lastData = null  // 缓存最后一条数据，用于新页面注册时立即回掉
-    this._listenerGeneration = 0  // 监听器代数，每次重连递增，旧监听器自动失效
+    this._currentConnectionSessionId = 0  // 当前连接 Session ID，断线重连时更新，旧监听器自动失效
     this._deviceInfo = null  // 缓存设备信息（连接成功后自动获取一次，固定不变）
     this._devices = []  // 扫描到的设备列表 [{deviceId, name, RSSI}]
     this._scanning = false  // 是否正在扫描
@@ -83,8 +83,8 @@ class BleService {
           this._rxCharId = ''
           this._receiveBuffer = ''
           this._lastData = null  // 断开连接时清除缓存数据
-          // 递增监听器代数，使旧监听器自动失效（替代不可靠的 off 方法）
-          this._listenerGeneration++
+          // 更新 Session ID，使旧监听器自动失效（替代不可靠的 off 方法）
+          this._currentConnectionSessionId = Date.now()
           // 断开连接时重置累计电能（重新连接后重新开始累积）
           this._resetEnergy()
           this._notifyStatus('已断开')
@@ -266,9 +266,25 @@ class BleService {
               clearTimeout(timeout)
               this._discoverServices().then(() => {
                 // 连接完全成功后，保存设备信息到本地存储（下次启动自动重连）
-                this._saveLastDevice(deviceId, deviceName || '')
+                // 策略：始终使用传入的 deviceName（扫描到的广播名），
+                // 如果无效则清空名称，让显示逻辑回退到 deviceId 后缀
+                let nameToSave = ''
+                if (deviceName && !this._isNameGarbled(deviceName)) {
+                  nameToSave = deviceName
+                  console.log('[BLE] 保存广播名:', nameToSave)
+                } else {
+                  console.log('[BLE] 广播名无效，清空名称')
+                }
+                this._saveLastDevice(deviceId, nameToSave)
                 resolve()
-              }).catch(reject)
+              }).catch((err) => {
+                // 发现服务失败，重置连接状态
+                console.error('[BLE] 发现服务失败:', err)
+                this._connected = false
+                this._deviceId = ''
+                this._notifyStatus('连接失败')
+                reject(err)
+              })
             }
           }, 2000)
         },
@@ -291,7 +307,7 @@ class BleService {
    * 在 App 启动时调用，如果本地存储中有上次连接的设备信息，自动尝试连接
    * @returns {Promise<boolean>} 是否成功发起重连（不代表连接成功）
    */
-  async autoReconnect() {
+  async autoReconnect(retryCount = 0) {
     const lastDevice = this._getLastDevice()
     if (!lastDevice) {
       console.log('[BLE] 没有上次连接的设备，跳过自动重连')
@@ -301,28 +317,99 @@ class BleService {
       console.log('[BLE] 已连接，跳过自动重连')
       return false
     }
-    console.log('[BLE] 尝试自动重连:', lastDevice.name || lastDevice.deviceId)
+    console.log('[BLE] 尝试自动重连 (第' + (retryCount + 1) + '次):', lastDevice.name || lastDevice.deviceId)
     this._notifyStatus('自动重连中...')
     try {
-      await this.connect(lastDevice.deviceId, lastDevice.name)
+      // 自动重连时不传旧名字，避免覆盖 ESP32 当前实际的广播名
+      // 传空字符串让 connect() 保留本地已有名称不变
+      await this.connect(lastDevice.deviceId, '')
       console.log('[BLE] 自动重连成功:', lastDevice.name || lastDevice.deviceId)
       this._notifyStatus('已连接')
       return true
     } catch (err) {
       console.warn('[BLE] 自动重连失败:', err.message || err)
+      // 重试机制：最多重试 3 次，间隔递增（3s, 6s, 12s）
+      if (retryCount < 3) {
+        const delay = (retryCount + 1) * 3000
+        console.log('[BLE] 将在 ' + (delay / 1000) + ' 秒后重试...')
+        this._notifyStatus('重连失败，' + (delay / 1000) + '秒后重试...')
+        setTimeout(() => {
+          this.autoReconnect(retryCount + 1)
+        }, delay)
+        return false
+      }
       this._notifyStatus('自动重连失败，请手动连接')
       return false
     }
   }
 
   /**
+   * 获取可读的设备显示名称
+   * 如果 name 为空或乱码，使用 deviceId 的后 8 位作为显示名
+   */
+  _getDisplayName(deviceId, name) {
+    if (name && name.trim().length > 0) return name.trim()
+    // name 不可用时，用 deviceId 后 8 位
+    if (deviceId && deviceId.length > 8) {
+      return '设备(' + deviceId.substring(deviceId.length - 8).toUpperCase() + ')'
+    }
+    return '已连接设备'
+  }
+
+  /**
+   * 检测名称是否为乱码（包含太多控制字符或非UTF-8序列）
+   * 蓝牙扫描返回的名称有时会包含乱码，需要过滤
+   */
+  _isNameGarbled(name) {
+    if (!name || name.trim().length === 0) return true
+    let controlCount = 0
+    for (let i = 0; i < name.length; i++) {
+      const code = name.charCodeAt(i)
+      // 控制字符 (0x00-0x1F, 0x7F) 且不是常见的换行/回车/制表符
+      if ((code > 0 && code < 0x08) || (code > 0x0D && code < 0x20) || code === 0x7F) {
+        controlCount++
+      }
+      // 代理项（未配对的UTF-16代理）也是乱码
+      if (code >= 0xD800 && code <= 0xDFFF) {
+        controlCount++
+      }
+    }
+    // 如果超过 30% 的字符是控制字符，认为是乱码
+    return (controlCount / name.length) > 0.3
+  }
+
+  /**
    * 保存上次连接的设备信息到本地存储
+   * 如果新名称为乱码且本地已有有效名称，则不覆盖
    */
   _saveLastDevice(deviceId, name) {
     try {
-      const info = { deviceId, name, time: Date.now() }
+      const cleanName = (name || '').trim()
+      
+      // 如果新名称为空，直接保存空名称（覆盖旧的），让显示逻辑回退到 deviceId
+      if (!cleanName) {
+        const info = { deviceId, name: '', time: Date.now() }
+        uni.setStorageSync(STORAGE_KEY_LAST_DEVICE, info)
+        console.log('[BLE] 已清空设备名称')
+        return
+      }
+      
+      // 乱码检测：如果新名称是乱码，且本地已有有效名称，则不覆盖
+      if (this._isNameGarbled(cleanName)) {
+        try {
+          const existing = uni.getStorageSync(STORAGE_KEY_LAST_DEVICE)
+          if (existing && existing.deviceId === deviceId &&
+              existing.name && existing.name.trim().length > 0 &&
+              !this._isNameGarbled(existing.name)) {
+            console.log('[BLE] 扫描名称为乱码，保留本地有效名称:', existing.name)
+            return
+          }
+        } catch (e) {}
+      }
+      
+      const info = { deviceId, name: cleanName, time: Date.now() }
       uni.setStorageSync(STORAGE_KEY_LAST_DEVICE, info)
-      console.log('[BLE] 已保存设备信息到本地:', name || deviceId)
+      console.log('[BLE] 已保存设备信息到本地:', this._getDisplayName(deviceId, cleanName))
     } catch (err) {
       console.warn('[BLE] 保存设备信息失败:', err)
     }
@@ -496,21 +583,21 @@ class BleService {
   }
 
   /**
-   * 开始监听数据（代数机制，彻底解决 uni-app 不支持 off 导致的监听器叠加问题）
+   * 开始监听数据（闭包 Session 拦截法）
    *
    * 核心思路:
    *   uni-app 的 uni.offBLECharacteristicValueChange() 在 Android 上完全无效,
    *   每次重连后 onBLECharacteristicValueChange 会叠加新的监听器。
-   *   解决方案: 每次注册时捕获当前代数, 回调中检查代数是否匹配,
+   *   解决方案: 每次连接生成唯一 Session ID, 回调中检查 Session 是否匹配,
    *   不匹配则直接丢弃数据, 实现"旧监听器自动失效"。
    *
    *   同时, 每次注册时重置 _receiveBuffer, 并丢弃注册后短时间内收到的数据
    *   （用于排空底层 BLE 协议栈残留的旧连接脏数据）。
    */
   _startListening() {
-    // 递增代数，使之前的旧监听器自动失效
-    this._listenerGeneration++
-    const myGen = this._listenerGeneration
+    // 生成新的连接 Session ID，使旧监听器自动失效
+    this._currentConnectionSessionId = Date.now()
+    const mySessionId = this._currentConnectionSessionId
 
     // 重置接收缓冲区
     this._receiveBuffer = ''
@@ -518,10 +605,12 @@ class BleService {
     // 注册防抖: 丢弃注册后 800ms 内收到的数据（排空底层残留脏数据）
     const debounceEnd = Date.now() + 800
 
-    // 定义监听器函数（不保存引用，因为 off 无效，靠代数机制失效）
-    const handler = (res) => {
-      // === 代数检查：如果已经不是最新的监听器，直接丢弃 ===
-      if (this._listenerGeneration !== myGen) {
+    console.log('[BLE] 注册特征值变化监听器, Session:', mySessionId)
+
+    // 注册监听器（每次重连都注册新的，旧的靠 Session 机制自动失效）
+    uni.onBLECharacteristicValueChange((res) => {
+      // === Session 检查：如果已经不是最新的监听器，直接丢弃（静默） ===
+      if (mySessionId !== this._currentConnectionSessionId) {
         return
       }
 
@@ -564,15 +653,11 @@ class BleService {
             this._lastData = json
             this._onDataCallback && this._onDataCallback(json)
           } catch (e) {
-            console.warn('[BLE] 解析失败:', trimmed)
+            // 静默处理，防止控制台被半截子脏数据刷屏
           }
         }
       }
-    }
-
-    // 注册监听器（每次重连都注册新的，旧的靠代数机制自动失效）
-    uni.onBLECharacteristicValueChange(handler)
-    console.log('[BLE] 特征值变化监听器已注册 (gen=' + myGen + ', 防抖800ms)')
+    })
   }
 
   /**

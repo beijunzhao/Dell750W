@@ -6,6 +6,7 @@
  */
 #include "ble_server.h"
 #include "esp_log.h"
+#include "nvs_flash.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
@@ -44,6 +45,7 @@ static ble_rx_callback_t g_rx_callback = nullptr;
 // 主循环推送 get_data 和 on_ble_rx 响应 get_info 可能同时调用 ble_server_send
 // 不加锁会导致两个 JSON 的分片交错, App 端无法解析
 static SemaphoreHandle_t g_tx_mutex = NULL;
+
 
 // ---------- 前向声明 ----------
 static int ble_gap_event_cb(struct ble_gap_event *event, void *arg);
@@ -101,6 +103,20 @@ esp_err_t ble_server_init(void)
         }
     }
 
+    // 擦除 NVS 中残留的蓝牙名称（之前改名功能遗留的乱码数据），恢复默认广播名
+    {
+        nvs_handle_t nvs_handle;
+        esp_err_t err = nvs_open("ble", NVS_READWRITE, &nvs_handle);
+        if (err == ESP_OK) {
+            err = nvs_erase_key(nvs_handle, "device_name");
+            if (err == ESP_OK) {
+                ESP_LOGI(TAG, "Erased stale NVS device_name, will use default");
+            }
+            nvs_commit(nvs_handle);
+            nvs_close(nvs_handle);
+        }
+    }
+
     // 初始化标准 GAP 和 GATT 服务
     ble_svc_gap_init();
     ble_svc_gatt_init();
@@ -119,7 +135,7 @@ esp_err_t ble_server_init(void)
         return ESP_FAIL;
     }
 
-    // 设置设备名称
+    // 设置设备名称（使用默认宏，不带 MAC 后缀）
     rc = ble_svc_gap_device_name_set(BLE_DEVICE_NAME);
     if (rc != 0) {
         ESP_LOGW(TAG, "Device name set failed: %d", rc);
@@ -185,10 +201,10 @@ esp_err_t ble_server_send(const char* data)
             result = ESP_FAIL;
             goto cleanup;
         }
-        ESP_LOGI(TAG, "BLE TX (%zu bytes): %s", total_len, data);
+        ESP_LOGD(TAG, "BLE TX (%zu bytes): %s", total_len, data);
     } else {
         // 大数据, 分包发送
-        ESP_LOGI(TAG, "BLE TX: splitting %zu bytes into chunks", total_len);
+        ESP_LOGD(TAG, "BLE TX: splitting %zu bytes into chunks", total_len);
 
         size_t offset = 0;
         int chunk_num = 0;
@@ -220,7 +236,7 @@ esp_err_t ble_server_send(const char* data)
                 goto cleanup;
             }
 
-            ESP_LOGD(TAG, "Chunk %d: %zu bytes (offset %zu/%zu)%s",
+            ESP_LOGV(TAG, "Chunk %d: %zu bytes (offset %zu/%zu)%s",
                      chunk_num, chunk_len, offset, total_len,
                      is_last ? " [LAST]" : "");
             offset += chunk_size;
@@ -229,7 +245,7 @@ esp_err_t ble_server_send(const char* data)
             vTaskDelay(pdMS_TO_TICKS(50));
         }
 
-        ESP_LOGI(TAG, "BLE TX complete: %d chunks, %zu total bytes", chunk_num, total_len);
+        ESP_LOGD(TAG, "BLE TX complete: %d chunks, %zu total bytes", chunk_num, total_len);
     }
 
 cleanup:

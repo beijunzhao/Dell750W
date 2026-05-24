@@ -14,4 +14,4 @@ dependencies:
   #   # `public` flag doesn't have an effect dependencies of the `main` component.
   #   # All dependencies of `main` are public by default.
   #   public: true
-  andresragot/driver_st7789: ^1.0.0
+  # andresragot/driver_st7789: ^1.0.0

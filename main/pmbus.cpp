@@ -126,10 +126,11 @@ int PMBus::scan()
     }
 
     // 读取遥测数据, 每个寄存器间加 1ms 延时 (匹配参考实现)
-    E_in  = _readLinear(PMBUS_READ_EIN);
-    esp_rom_delay_us(1000);
-    E_out = _readLinear(PMBUS_READ_EOUT);
-    esp_rom_delay_us(1000);
+    // E_in/E_out 注释掉: 该 PSU 的累计电能寄存器格式不匹配 LINEAR11, 持续产生警告日志
+    // E_in  = _readLinear(PMBUS_READ_EIN);
+    // esp_rom_delay_us(1000);
+    // E_out = _readLinear(PMBUS_READ_EOUT);
+    // esp_rom_delay_us(1000);
     V_in  = _readLinear(PMBUS_READ_VIN);
     esp_rom_delay_us(1000);
     I_in  = _readLinear(PMBUS_READ_IIN);
@@ -171,7 +172,6 @@ const char* PMBus::getDataJson()
         "\"V_out\":%.3f,\"I_out\":%.3f,"
         "\"V_in\":%.3f,\"I_in\":%.3f,"
         "\"W_out\":%.1f,\"W_in\":%.1f,"
-        "\"E_out\":%.1f,\"E_in\":%.1f,"
         "\"temperature\":[%.1f,%.1f,%.1f],"
         "\"fan_speed\":%.0f,"
         "\"device_online\":true"
@@ -179,7 +179,6 @@ const char* PMBus::getDataJson()
         V_out, I_out,
         V_in, I_in,
         W_out, W_in,
-        E_out, E_in,
         temperature[0], temperature[1], temperature[2],
         fanSpeed[0]
     );

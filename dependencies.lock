@@ -1,41 +1,10 @@
 dependencies:
-  andresragot/driver_lcd:
-    component_hash: 5909c8c422129b2a111c8c484c8f7c79549a73087ceafbbc4b26eb36a72df3f9
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=5.4.1'
-    source:
-      registry_url: https://components.espressif.com
-      type: service
-    version: 1.0.0
-  andresragot/driver_st7789:
-    component_hash: cf597dbe8175ab408009780bcbdfa478108d108440db2276dcb07b49a9887a44
-    dependencies:
-    - name: andresragot/driver_lcd
-      registry_url: https://components.espressif.com
-      require: private
-      version: ^1.0.0
-    - name: idf
-      require: private
-      version: '>=5.4.1'
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    targets:
-    - esp32
-    - esp32s2
-    - esp32s3
-    - esp32c3
-    - esp32p4
-    version: 1.0.0
   idf:
     source:
       type: idf
     version: 6.0.1
 direct_dependencies:
-- andresragot/driver_st7789
 - idf
-manifest_hash: 1579e46cd085168f0b21d539c4996b145cf7da2a2df0e473594b51d88e3a5140
+manifest_hash: e44bf68eca6b7b264ddae08cd014cd3294c0473230381b6d6f88ed18ec879038
 target: esp32c3
 version: 3.0.0

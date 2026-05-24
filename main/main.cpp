@@ -497,7 +497,7 @@ static void send_response(const char* json)
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "Failed to send BLE response");
     } else {
-        ESP_LOGI(TAG, "BLE TX: %s", json);
+        ESP_LOGD(TAG, "BLE TX: %s", json);
     }
 }
 
