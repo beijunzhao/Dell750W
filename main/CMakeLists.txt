@@ -5,6 +5,7 @@ idf_component_register(
         "adc_sampler.cpp"
         "pmbus.cpp"
         "ble_server.cpp"
+        "lcd_display.cpp"
     PRIV_REQUIRES
         nvs_flash
         esp_driver_gpio
@@ -12,6 +13,8 @@ idf_component_register(
         esp_driver_ledc
         esp_adc
         bt
+        esp_lcd
+        esp_driver_spi
     INCLUDE_DIRS
         "."
 )

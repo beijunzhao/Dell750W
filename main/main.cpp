@@ -18,6 +18,7 @@
 #include "adc_sampler.h"
 #include "pmbus.h"
 #include "ble_server.h"
+#include "lcd_display.h"
 
 #include "esp_log.h"
 #include "esp_system.h"
@@ -101,8 +102,17 @@ extern "C" void app_main(void)
 
     // ========== 主循环 ==========
     uint64_t lastDataPush = 0;
+    uint64_t lastLcdUpdate = 0;
     bool firstDataSent = false;
     bool wasConnected = false;
+
+    // 如果显示屏初始化成功，显示启动画面（纯色填充）
+    if (lcd_display_is_initialized()) {
+        // 分配一个简单的帧缓冲区用于测试显示
+        // 注意: 240*320*2 = 153600 字节，对于 ESP32-C3 来说较大
+        // 这里先不做复杂显示，仅作为驱动验证
+        ESP_LOGI(TAG, "LCD display ready for updates");
+    }
 
     while (1) {
         // 按键处理
@@ -156,6 +166,13 @@ extern "C" void app_main(void)
             }
         }
 
+        // 每 2 秒更新一次显示屏（如果已初始化）
+        if (lcd_display_is_initialized() && (now - lastLcdUpdate) >= 2000) {
+            lastLcdUpdate = now;
+            // TODO: 后续可添加 LVGL 或自定义图形渲染
+            // 当前仅保持驱动可用，显示内容后续实现
+        }
+
         vTaskDelay(pdMS_TO_TICKS(100)); // 100ms 循环周期
     }
 }
@@ -194,6 +211,15 @@ static void init_peripherals(void)
     btnCfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
     btnCfg.intr_type    = GPIO_INTR_DISABLE;
     gpio_config(&btnCfg);
+
+    // 初始化 ST7789 TFT 显示屏
+    ret = lcd_display_init();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "LCD display init failed, continuing without display");
+    } else {
+        ESP_LOGI(TAG, "LCD display initialized (%dx%d)",
+                 lcd_display_get_width(), lcd_display_get_height());
+    }
 }
 
 // ==================== BLE 接收回调 ====================
