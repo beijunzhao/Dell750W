@@ -36,6 +36,7 @@ class BleService {
     this._initialized = false  // 防止重复初始化
     this._connectionStateChangeRegistered = false  // 防止重复注册连接状态监听
     this._lastData = null  // 缓存最后一条数据，用于新页面注册时立即回掉
+    this._listenerGeneration = 0  // 监听器代数，每次重连递增，旧监听器自动失效
     this._deviceInfo = null  // 缓存设备信息（连接成功后自动获取一次，固定不变）
     this._devices = []  // 扫描到的设备列表 [{deviceId, name, RSSI}]
     this._scanning = false  // 是否正在扫描
@@ -82,9 +83,16 @@ class BleService {
           this._rxCharId = ''
           this._receiveBuffer = ''
           this._lastData = null  // 断开连接时清除缓存数据
+          // 递增监听器代数，使旧监听器自动失效（替代不可靠的 off 方法）
+          this._listenerGeneration++
           // 断开连接时重置累计电能（重新连接后重新开始累积）
           this._resetEnergy()
           this._notifyStatus('已断开')
+          // 底层原生断线重连：延迟 3 秒后自动尝试重连上次设备
+          setTimeout(() => {
+            console.log('[BLE] 断线自动重连：3秒延迟到期，尝试重连')
+            this.autoReconnect()
+          }, 3000)
         } else {
           this._notifyStatus('已连接')
         }
@@ -488,20 +496,55 @@ class BleService {
   }
 
   /**
-   * 开始监听数据
+   * 开始监听数据（代数机制，彻底解决 uni-app 不支持 off 导致的监听器叠加问题）
+   *
+   * 核心思路:
+   *   uni-app 的 uni.offBLECharacteristicValueChange() 在 Android 上完全无效,
+   *   每次重连后 onBLECharacteristicValueChange 会叠加新的监听器。
+   *   解决方案: 每次注册时捕获当前代数, 回调中检查代数是否匹配,
+   *   不匹配则直接丢弃数据, 实现"旧监听器自动失效"。
+   *
+   *   同时, 每次注册时重置 _receiveBuffer, 并丢弃注册后短时间内收到的数据
+   *   （用于排空底层 BLE 协议栈残留的旧连接脏数据）。
    */
   _startListening() {
-    uni.onBLECharacteristicValueChange((res) => {
-      // 直接将 ArrayBuffer 转为字符串 (兼容 uni-app Android, 避免 TextDecoder 不可用)
+    // 递增代数，使之前的旧监听器自动失效
+    this._listenerGeneration++
+    const myGen = this._listenerGeneration
+
+    // 重置接收缓冲区
+    this._receiveBuffer = ''
+
+    // 注册防抖: 丢弃注册后 800ms 内收到的数据（排空底层残留脏数据）
+    const debounceEnd = Date.now() + 800
+
+    // 定义监听器函数（不保存引用，因为 off 无效，靠代数机制失效）
+    const handler = (res) => {
+      // === 代数检查：如果已经不是最新的监听器，直接丢弃 ===
+      if (this._listenerGeneration !== myGen) {
+        return
+      }
+
+      // 直接将 ArrayBuffer 转为字符串
       const text = this._arrayBufferToString(res.value)
 
-      // 处理粘包
+      // === 防抖窗口：注册后 800ms 内只排空不解析 ===
+      if (Date.now() < debounceEnd) {
+        this._receiveBuffer += text
+        const lines = this._receiveBuffer.split('\n')
+        this._receiveBuffer = lines.pop() || ''
+        if (this._receiveBuffer.length > 2048) {
+          this._receiveBuffer = ''
+        }
+        return
+      }
+
+      // === 正常接收 ===
       this._receiveBuffer += text
       const lines = this._receiveBuffer.split('\n')
-      // 最后一个可能不完整，保留到下次
       this._receiveBuffer = lines.pop() || ''
 
-      // 安全保护: 如果缓冲区超过 2KB 还没有遇到 '\n', 说明数据异常, 清空重来
+      // 安全保护: 超过 2KB 无换行则清空
       if (this._receiveBuffer.length > 2048) {
         console.warn('[BLE] 接收缓冲区异常 (超过2KB无换行), 清空重来')
         this._receiveBuffer = ''
@@ -514,13 +557,10 @@ class BleService {
           try {
             const json = JSON.parse(trimmed)
             console.log('[BLE] 收到数据:', json)
-            // 缓存设备信息（MFR 数据是固定不变的，连接后只获取一次）
             if (json.MFR_ID) {
               this._deviceInfo = json
             }
-            // 注入 App 端自行计算的累计电能（替换 PMBus 不可靠的 E_in/E_out）
             this._injectEnergyData(json)
-            // 缓存最后一条数据，用于新页面注册时立即回掉
             this._lastData = json
             this._onDataCallback && this._onDataCallback(json)
           } catch (e) {
@@ -528,7 +568,11 @@ class BleService {
           }
         }
       }
-    })
+    }
+
+    // 注册监听器（每次重连都注册新的，旧的靠代数机制自动失效）
+    uni.onBLECharacteristicValueChange(handler)
+    console.log('[BLE] 特征值变化监听器已注册 (gen=' + myGen + ', 防抖800ms)')
   }
 
   /**
