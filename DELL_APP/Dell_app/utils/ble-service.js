@@ -860,7 +860,7 @@ class BleService {
 
   /**
    * 设定输出电流
-   * @param {number} current 电流值 (0-60A)
+   * @param {number} current 电流值 (0-62.5A)
    */
   setCurrent(current) {
     return this.send({ cmd: 'set', I_set: parseFloat(current.toFixed(3)) })

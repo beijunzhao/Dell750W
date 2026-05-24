@@ -117,7 +117,7 @@ esp_err_t PowerControl::setCurrent(float current)
 
     _currentSet = current;
 
-    // 正向逻辑: I_DAC = (I_target / 60.0) * 3.0
+    // 正向逻辑: I_DAC = (I_target / 62.5) * 3.0
     float iDac = (current / PSU_CURRENT_MAX) * V_DAC_MAX;
 
     // PWM 占空比 = (I_DAC / 3.3) * 8191

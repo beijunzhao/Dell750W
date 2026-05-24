@@ -6,7 +6,7 @@
  *
  * 安全关键:
  *   - 电压控制为反向逻辑: PWM占空比=0 时输出最高电压(12V)!
- *   - 电流控制为正向逻辑: PWM占空比 对应 0~60A
+ *   - 电流控制为正向逻辑: PWM占空比 对应 0~62.5A
  */
 #ifndef POWER_CONTROL_H
 #define POWER_CONTROL_H
@@ -46,11 +46,11 @@ public:
 
     /**
      * 设定目标输出电流
-     * @param current 目标电流 (0.0 ~ 60.0A)
+     * @param current 目标电流 (0.0 ~ 62.5A)
      * @return ESP_OK 或 ESP_ERR_INVALID_ARG
      *
      * 内部公式(正向逻辑):
-     *   I_DAC = (current / 60.0) * 3.0
+     *   I_DAC = (current / 62.5) * 3.0
      *   PWM_duty = (I_DAC / 3.3) * PWM_MAX_DUTY
      */
     static esp_err_t setCurrent(float current);

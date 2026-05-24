@@ -121,7 +121,7 @@
 				connected: false,
 				statusText: '未连接',
 				voltageMax: 12.0,
-				currentMax: 60.0,
+				currentMax: 62.5,
 				deviceInfo: {
 					mfr_id: '',
 					mfr_model: '',

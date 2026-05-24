@@ -41,7 +41,7 @@
 
 // ---------- 电源参数 ----------
 #define PSU_VOLTAGE_MAX   12.0f       // 电源最高输出电压
-#define PSU_CURRENT_MAX   60.0f       // 电源最高输出电流
+#define PSU_CURRENT_MAX   62.5f       // 电源最高输出电流 (750W / 12V)
 #define ADC_DIVIDER_RATIO 5.094f      // 分压比: (20.47+5)/5
 #define ADC_SAMPLE_COUNT  10          // 移动平均滤波采样数
 

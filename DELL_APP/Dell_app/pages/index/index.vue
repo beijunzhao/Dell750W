@@ -284,7 +284,7 @@
 				voltageSet: 0,
 				currentSet: 0,
 				voltageMax: 12.0,
-				currentMax: 60.0,
+				currentMax: 62.5,
 				powerData: {
 					W_out: 0, W_in: 0, E_out: 0
 				},
@@ -294,7 +294,7 @@
 					{ label: '12V 5A', voltage: 12.0, current: 5.0 },
 					{ label: '12V 10A', voltage: 12.0, current: 10.0 },
 					{ label: '12V 20A', voltage: 12.0, current: 20.0 },
-					{ label: '满载', voltage: 12.0, current: 60.0 }
+					{ label: '满载', voltage: 12.0, current: 62.5 }
 				],
 				// 自定义弹窗状态
 				showModal: false,
