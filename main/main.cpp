@@ -24,6 +24,7 @@
 #include "pmbus.h"
 #include "ble_server.h"
 #include "lcd_display.h"
+#include "lvgl_setup.h"
 
 #include "esp_log.h"
 #include "esp_system.h"
@@ -291,6 +292,16 @@ static void init_peripherals(void)
     } else {
         ESP_LOGI(TAG, "LCD display initialized (%dx%d)",
                  lcd_display_get_width(), lcd_display_get_height());
+
+        // 初始化 LVGL 并绑定 ST7789 面板
+        ret = lvgl_setup_init(lcd_display_get_io(),
+                              lcd_display_get_panel());
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "LVGL init failed: %s", esp_err_to_name(ret));
+        } else {
+            ESP_LOGI(TAG, "LVGL initialized, running demo...");
+            lvgl_demo_run();
+        }
     }
 }
 

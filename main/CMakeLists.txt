@@ -6,6 +6,7 @@ idf_component_register(
         "pmbus.cpp"
         "ble_server.cpp"
         "lcd_display.cpp"
+        "lvgl_setup.cpp"
     PRIV_REQUIRES
         nvs_flash
         esp_driver_gpio
@@ -15,6 +16,7 @@ idf_component_register(
         bt
         esp_lcd
         esp_driver_spi
+        esp_lvgl_port
     INCLUDE_DIRS
         "."
 )
