@@ -2,7 +2,11 @@
  * lvgl_setup.cpp - LVGL 显示初始化 + 色彩演示 (基于 esp_lvgl_port)
  *
  * 硬件平台: ESP32-C3
- * 屏幕: 2.01英寸 ST7789P3, 240x296, RGB565
+ * 屏幕: 2.01英寸 ST7789P3, 240x296 (竖屏) → LVGL 软件旋转 90° 实现横屏
+ *
+ * 横屏方案: 硬件保持 MADCTL=0x00 (竖屏, MV=0),
+ * LVGL lv_display_set_rotation(270°) 在软件层旋转 UI,
+ * 避免 MV=1 导致的 GRAM 填充方向与 LVGL 扫描线不匹配问题.
  */
 #include "lvgl_setup.h"
 
@@ -45,8 +49,8 @@ esp_err_t lvgl_setup_init(esp_lcd_panel_io_handle_t io,
     }
     ESP_LOGI(TAG, "LVGL port initialized");
 
-    // 3. 添加 ST7789 显示设备
-    // buffer_size: 40 行 × 240 像素 = 9600 像素 ≈ 19KB (单缓冲, ESP32-C3 DRAM)
+    // 3. 添加 ST7789 显示设备 (物理竖屏 240x296, LVGL 软件旋转到横屏)
+    // buffer_size: 40 行 × 240 像素 = 9600 像素 ≈ 19KB (单缓冲)
     const lvgl_port_display_cfg_t disp_cfg = {
         .io_handle    = io,
         .panel_handle = panel,
@@ -72,9 +76,15 @@ esp_err_t lvgl_setup_init(esp_lcd_panel_io_handle_t io,
         lvgl_port_deinit();
         return ESP_FAIL;
     }
-    ESP_LOGI(TAG, "Display added: %dx%d, rotation=portrait", disp_cfg.hres, disp_cfg.vres);
 
-    // 4. 设置默认主题颜色
+    // LVGL 软件旋转 270° → 逻辑坐标 296×240 横屏
+    lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_270);
+    ESP_LOGI(TAG, "Display added: physical %dx%d, logical landscape %dx%d",
+             disp_cfg.hres, disp_cfg.vres,
+             lv_display_get_horizontal_resolution(disp),
+             lv_display_get_vertical_resolution(disp));
+
+    // 4. 设置默认主题颜色 (逻辑坐标已横屏, 覆盖整个 296x240 区域)
     lvgl_port_lock(0);
     lv_obj_set_style_bg_color(lv_screen_active(), lv_color_make(0, 0, 0), 0);
     lv_obj_set_style_bg_opa(lv_screen_active(), LV_OPA_COVER, 0);
@@ -130,9 +140,9 @@ void lvgl_demo_run(void)
     lv_obj_set_style_bg_color(lv_screen_active(),
                               lv_color_make(255, 255, 255), 0);
 
-    // 中央黑色矩形框: 160×110, 边框 4px
+    // 中央黑色矩形框: 180×110, 边框 4px (逻辑 296x240 横屏)
     lv_obj_t *rect = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(rect, 160, 110);
+    lv_obj_set_size(rect, 180, 110);
     lv_obj_center(rect);
     lv_obj_set_style_radius(rect, 0, 0);                // 无圆角
     lv_obj_set_style_bg_color(rect, lv_color_make(255, 255, 255), 0);

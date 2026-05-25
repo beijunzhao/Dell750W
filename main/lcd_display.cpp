@@ -3,7 +3,7 @@
  *
  * ===== 核心设计 =====
  * 1. DMA 安全: max_transfer_sz 限制为 40 行 (~19KB), 避免 ESP32-C3 OOM
- * 2. GRAM 偏移: set_gap(0,24) 补偿 Y 轴物理裁切
+ * 2. GRAM 偏移: set_gap(0,0) 可见区起于 GRAM 第 0 行
  * 3. 局部刷新: 所有写屏操作必须传入坐标，杜绝全屏 DMA 传输
  * 4. ST7789P3 专用初始化: 补充厂商 Gamma/VCOM/FrameRate 寄存器
  *

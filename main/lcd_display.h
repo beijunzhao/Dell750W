@@ -15,8 +15,8 @@ extern "C" {
 #endif
 
 /* ---- 屏幕尺寸 ---- */
-#define LCD_WIDTH   240
-#define LCD_HEIGHT  296
+#define LCD_WIDTH   296
+#define LCD_HEIGHT  240
 
 /* ---- 常用 RGB565 颜色 ---- */
 #define LCD_COLOR_BLACK   0x0000
