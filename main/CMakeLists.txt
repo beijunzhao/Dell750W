@@ -7,6 +7,7 @@ idf_component_register(
         "ble_server.cpp"
         "lcd_display.cpp"
         "lvgl_setup.cpp"
+        "lvgl_ui.cpp"
         "calibration.cpp"
     PRIV_REQUIRES
         nvs_flash

@@ -32,6 +32,8 @@
 #include "ble_server.h"
 #include "lcd_display.h"
 #include "lvgl_setup.h"
+#include "lvgl_ui.h"
+#include "esp_lvgl_port.h"
 #include "calibration.h"
 
 #include "esp_log.h"
@@ -318,8 +320,11 @@ static void init_peripherals(void)
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "LVGL init failed: %s", esp_err_to_name(ret));
         } else {
-            ESP_LOGI(TAG, "LVGL initialized, running demo...");
-            lvgl_demo_run();
+            ESP_LOGI(TAG, "LVGL initialized, starting dashboard UI...");
+            // 启动仪表盘 UI (在 LVGL 锁内执行)
+            lvgl_port_lock(0);
+            lvgl_ui_init();
+            lvgl_port_unlock();
         }
     }
 }

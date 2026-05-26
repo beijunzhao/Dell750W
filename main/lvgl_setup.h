@@ -27,13 +27,10 @@ esp_err_t lvgl_setup_init(esp_lcd_panel_io_handle_t io_handle,
                           esp_lcd_panel_handle_t panel_handle);
 
 /**
- * @brief 运行色彩演示 (LVGL 版本)
- *
- * 流程:
- *   红(1s) → 绿(1s) → 蓝(1s), 循环 3 次
- *   最后白底 + 中央黑色矩形框 + "Hello ESP32-C3" 文字
+ * @brief 检查 LVGL 是否已就绪
+ * @return true 已就绪
  */
-void lvgl_demo_run(void);
+bool lvgl_is_ready(void);
 
 #ifdef __cplusplus
 }

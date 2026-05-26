@@ -32,7 +32,8 @@ static const char *TAG = "LCD";
 #define LCD_ENDIAN_LITTLE  1
 
 // ---- 颜色翻转: 0=不翻, 1=翻转 ----
-#define LCD_INVERT_COLOR   0
+// IPS 面板 (Normally Black) 需要开启反色才能正常显示
+#define LCD_INVERT_COLOR   1
 
 // ---- SPI 模式: 0 或 3 ----
 #define LCD_SPI_MODE       0
@@ -121,9 +122,11 @@ static void st7789p3_init_seq(void)
         esp_lcd_panel_io_tx_param(s_io, 0, v, sizeof(v));
     }
 
-    // ---- MADCTL (36h) ----
+    // ---- MADCTL (36h): BGR 顺序 ----
+    // Bit 3 (0x08)=BGR, Bit 3=0 是 RGB
+    // ST7789 原生像素格式为 BGR, 需设置 Bit 3=1
     {
-        const uint8_t v = 0x00; // MY=0 MX=0 MV=0 RGB=0
+        const uint8_t v = 0x08; // MY=0 MX=0 MV=0 BGR=1
         wr_cmd(0x36); wr_data(v);
     }
 

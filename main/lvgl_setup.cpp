@@ -1,8 +1,8 @@
 /**
- * lvgl_setup.cpp - LVGL 显示初始化 + 色彩演示 (基于 esp_lvgl_port)
+ * lvgl_setup.cpp - LVGL 显示初始化 (基于 esp_lvgl_port)
  *
  * 硬件平台: ESP32-C3
- * 屏幕: 2.01英寸 ST7789P3, 240x296 (竖屏) → LVGL 软件旋转 90° 实现横屏
+ * 屏幕: 2.01英寸 ST7789P3, 240x296 (竖屏) → LVGL 软件旋转 270° 实现横屏
  *
  * 横屏方案: 硬件保持 MADCTL=0x00 (竖屏, MV=0),
  * LVGL lv_display_set_rotation(270°) 在软件层旋转 UI,
@@ -95,70 +95,9 @@ esp_err_t lvgl_setup_init(esp_lcd_panel_io_handle_t io,
     return ESP_OK;
 }
 
-/* ========== 色彩演示 ========== */
+/* ========== 获取就绪状态 ========== */
 
-void lvgl_demo_run(void)
+bool lvgl_is_ready(void)
 {
-    if (!s_ready) {
-        ESP_LOGE(TAG, "LVGL not initialized, cannot run demo");
-        return;
-    }
-
-    ESP_LOGI(TAG, "========== Demo Start ==========");
-
-    // 阶段 1: 红 → 绿 → 蓝, 循环 3 次
-    for (int cycle = 1; cycle <= 3; cycle++) {
-        lvgl_port_lock(0);
-
-        lv_obj_set_style_bg_color(lv_screen_active(),
-                                  lv_color_make(255, 0, 0), 0);
-        ESP_LOGI(TAG, "Cycle %d/3: RED", cycle);
-        lvgl_port_unlock();
-        vTaskDelay(pdMS_TO_TICKS(1000));
-
-        lvgl_port_lock(0);
-        lv_obj_set_style_bg_color(lv_screen_active(),
-                                  lv_color_make(0, 255, 0), 0);
-        ESP_LOGI(TAG, "Cycle %d/3: GREEN", cycle);
-        lvgl_port_unlock();
-        vTaskDelay(pdMS_TO_TICKS(1000));
-
-        lvgl_port_lock(0);
-        lv_obj_set_style_bg_color(lv_screen_active(),
-                                  lv_color_make(0, 0, 255), 0);
-        ESP_LOGI(TAG, "Cycle %d/3: BLUE", cycle);
-        lvgl_port_unlock();
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-
-    // 阶段 2: 白底 + 中央黑色矩形框 + "Hello ESP32-C3"
-    ESP_LOGI(TAG, "Drawing final screen: white bg + black frame + text");
-
-    lvgl_port_lock(0);
-
-    // 白色背景
-    lv_obj_set_style_bg_color(lv_screen_active(),
-                              lv_color_make(255, 255, 255), 0);
-
-    // 中央黑色矩形框: 180×110, 边框 4px (逻辑 296x240 横屏)
-    lv_obj_t *rect = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(rect, 180, 110);
-    lv_obj_center(rect);
-    lv_obj_set_style_radius(rect, 0, 0);                // 无圆角
-    lv_obj_set_style_bg_color(rect, lv_color_make(255, 255, 255), 0);
-    lv_obj_set_style_bg_opa(rect, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(rect, lv_color_make(0, 0, 0), 0);
-    lv_obj_set_style_border_width(rect, 4, 0);
-    lv_obj_set_style_border_opa(rect, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_all(rect, 0, 0);
-
-    // "Hello ESP32-C3" 文字
-    lv_obj_t *label = lv_label_create(rect);
-    lv_label_set_text(label, "Hello ESP32-C3");
-    lv_obj_center(label);
-    lv_obj_set_style_text_color(label, lv_color_make(0, 0, 0), 0);
-
-    lvgl_port_unlock();
-
-    ESP_LOGI(TAG, "========== Demo Complete ==========");
+    return s_ready;
 }
