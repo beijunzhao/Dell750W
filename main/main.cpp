@@ -10,13 +10,20 @@
  *
  * 安全开机时序 (setup):
  *   1. SW_CTRL = LOW (切断电源输出)
- *   2. V_PWM = 最高占空比 (3.0V DAC → 0V 输出), I_PWM = 0
+ *   2. V_PWM = 0 (0V DAC → 0V 输出), I_PWM = 0
  *   3. 延时 50ms 等待 RC 滤波器稳定
  *   4. 初始化其他外设 (I2C, ADC, BLE, 按键)
  *
  * 通信协议: JSON over BLE UART (Nordic UART Service)
- *   请求: {"cmd":"get_data"} / {"cmd":"set","V_set":12.0} / {"cmd":"set","power":1}
- *   响应: {"V_out":12.0,...} / {"MFR_ID":"...",...}
+ *   请求:
+ *     {"cmd":"get_data"}          → 返回遥测数据 + 校准参数
+ *     {"cmd":"get_info"}          → 返回设备厂商信息
+ *     {"cmd":"set","V_set":12.0}  → 设置电压
+ *     {"cmd":"set","I_set":50.0}  → 设置电流
+ *     {"cmd":"set","power":1}     → 开关电源 (1=开, 0=关)
+ *     {"cmd":"calibrate","V_mult":1.005,"V_offset":-0.05}  → 电压校准
+ *     {"cmd":"clear_faults"}      → 清除故障
+ *   响应: {"V_out":12.0,...,"V_mult":1.0000,"V_offset":0.0000,"V_raw":12.1,...}
  */
 #include "pin_map.h"
 #include "power_control.h"
@@ -25,6 +32,7 @@
 #include "ble_server.h"
 #include "lcd_display.h"
 #include "lvgl_setup.h"
+#include "calibration.h"
 
 #include "esp_log.h"
 #include "esp_system.h"
@@ -41,13 +49,16 @@
 
 static const char* TAG = "Main";
 
+/* ---- 长按 OK 进入校准模式的阈值 (ms) ---- */
+#define LONG_PRESS_MS  2000
+
 // ---------- 前向声明 ----------
 extern "C" void nimble_host_task(void *param);
 static void on_ble_rx(const char* data, int len);
 static void init_peripherals(void);
 static void handle_buttons(void);
 static const char* build_full_data_json(void);
-static void send_response(const char* json);
+void send_response(const char* json);
 
 // FreeRTOS 任务函数前向声明
 static void task_hardware_poll(void *pvParameters);
@@ -73,7 +84,7 @@ extern "C" void app_main(void)
 
     // ========== 安全开机时序 (严禁修改) ==========
 
-    // 第一步: 锁定命门 - SW_CTRL 输出 LOW, V_PWM 最高占空比, I_PWM = 0
+    // 第一步: 锁定命门 - SW_CTRL 输出 LOW, V_PWM = 0 (0V), I_PWM = 0
     ESP_LOGI(TAG, "[BOOT SEQ] Step 1: Locking SW_CTRL LOW, setting PWM safe bias...");
     esp_err_t ret = PowerControl::init();
     if (ret != ESP_OK) {
@@ -81,8 +92,8 @@ extern "C" void app_main(void)
         while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
     }
 
-    // 时序注释: 此时 V_PWM 输出 90.9% 占空比 (3.0V → 0V 物理输出), I_PWM 输出 0%
-    // 硬件安全: 即使 MCU 在此后死机, 外部 RC 滤波器也会维持 V_DAC≈3.0V, I_DAC≈0V
+    // 时序注释: 此时 V_PWM 输出 0% 占空比 (0V → 0V 物理输出), I_PWM 输出 0%
+    // 硬件安全: 即使 MCU 在此后死机, 外部 RC 滤波器也会维持 V_DAC≈0V, I_DAC≈0V
 
     // 第二步: 延时 50ms, 等待 RC 滤波器电容充电稳定
     ESP_LOGI(TAG, "[BOOT SEQ] Step 2: Waiting 50ms for RC filter stabilization...");
@@ -210,6 +221,11 @@ static void task_hardware_poll(void *pvParameters)
         // ADC 采样
         ADCSampler::sample();
 
+        // 如果在校准模式, 推送 ADC 读数到校准模块
+        if (calibration_is_active()) {
+            calibration_update_adc(ADCSampler::getRawAdc());
+        }
+
         // 500ms 轮询一次
         vTaskDelay(pdMS_TO_TICKS(500));
     }
@@ -284,6 +300,9 @@ static void init_peripherals(void)
     btnCfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
     btnCfg.intr_type    = GPIO_INTR_DISABLE;
     gpio_config(&btnCfg);
+
+    // 初始化校准模块
+    calibration_init();
 
     // 初始化 ST7789 TFT 显示屏
     ret = lcd_display_init();
@@ -362,6 +381,9 @@ static void on_ble_rx(const char* data, int len)
     //   {"cmd":"set","I_set":XX.XX}
     //   {"cmd":"set","power":1|0}
     //   {"cmd":"clear_faults"}
+    //   {"cmd":"cal_mode","enter":1}       → 进入/退出校准模式
+    //   {"cmd":"cal_pwm_adjust","dir":1}   → PWM 微调 (1=增加, -1=减少)
+    //   {"cmd":"cal_confirm"}              → 确认当前校准点
 
     char cmd[32] = {};
     float val = 0.0f;
@@ -461,6 +483,83 @@ static void on_ble_rx(const char* data, int len)
         PMBus::clearFaults();
         send_response("{\"ack\":\"faults_cleared\"}");
     }
+    else if (strcmp(cmd, "calibrate") == 0) {
+        // 校准命令: {"cmd":"calibrate","V_mult":1.005,"V_offset":-0.05}
+        // 允许只传一个参数, 另一个保持不变
+        float newMult = ADCSampler::getCalMultiplier();
+        float newOff  = ADCSampler::getCalOffset();
+
+        const char* mp = strstr(line, "\"V_mult\":");
+        if (mp) {
+            mp = strstr(mp, ":") + 1;
+            newMult = strtof(mp, nullptr);
+        }
+        const char* op = strstr(line, "\"V_offset\":");
+        if (op) {
+            op = strstr(op, ":") + 1;
+            newOff = strtof(op, nullptr);
+        }
+
+        ADCSampler::calibrate(newMult, newOff);
+        ESP_LOGI(TAG, "Calibration set: mult=%.4f offset=%.4f", newMult, newOff);
+
+        snprintf(g_respBuf, sizeof(g_respBuf),
+            "{\"ack\":\"cal_ok\",\"V_mult\":%.4f,\"V_offset\":%.4f}",
+            newMult, newOff);
+        send_response(g_respBuf);
+    }
+    else if (strcmp(cmd, "cal_mode") == 0) {
+        // 校准模式命令: {"cmd":"cal_mode","enter":1}
+        const char* ep = strstr(line, "\"enter\":");
+        if (ep) {
+            ep = strstr(ep, ":") + 1;
+            ival = (int)strtof(ep, nullptr);
+            if (ival == 1) {
+                // 进入校准模式
+                if (!calibration_is_active()) {
+                    calibration_start();
+                    ESP_LOGI(TAG, "Calibration mode entered via BLE");
+                }
+                send_response("{\"ack\":\"cal_mode_entered\"}");
+            } else {
+                // 退出校准模式
+                if (calibration_is_active()) {
+                    calibration_stop();
+                    ESP_LOGI(TAG, "Calibration mode exited via BLE");
+                }
+                send_response("{\"ack\":\"cal_mode_exited\"}");
+            }
+        }
+    }
+    else if (strcmp(cmd, "cal_pwm_adjust") == 0) {
+        // PWM 微调命令: {"cmd":"cal_pwm_adjust","dir":1} 或 {"cmd":"cal_pwm_adjust","dir":-1}
+        if (!calibration_is_active()) {
+            send_response("{\"error\":\"not_in_cal_mode\"}");
+        } else {
+            const char* dp = strstr(line, "\"dir\":");
+            if (dp) {
+                dp = strstr(dp, ":") + 1;
+                ival = (int)strtof(dp, nullptr);
+                calibration_handle_button(
+                    (ival > 0),   // dir>0 → btn_up=true
+                    (ival < 0),   // dir<0 → btn_down=true
+                    false         // btn_ok=false
+                );
+                ESP_LOGI(TAG, "Cal PWM adjust: dir=%d", ival);
+                send_response("{\"ack\":\"pwm_adjusted\"}");
+            }
+        }
+    }
+    else if (strcmp(cmd, "cal_confirm") == 0) {
+        // 确认当前校准点: {"cmd":"cal_confirm"}
+        if (!calibration_is_active()) {
+            send_response("{\"error\":\"not_in_cal_mode\"}");
+        } else {
+            calibration_handle_button(false, false, true);
+            ESP_LOGI(TAG, "Cal step confirmed");
+            send_response("{\"ack\":\"cal_confirmed\"}");
+        }
+    }
     else {
         ESP_LOGW(TAG, "Unknown command: '%s'", cmd);
         send_response("{\"error\":\"unknown_command\"}");
@@ -474,7 +573,26 @@ static void on_ble_rx(const char* data, int len)
 
 static const char* build_full_data_json(void)
 {
-    // 构建包含 PMBus 数据 + ADC 外部电压 + 控制状态的综合 JSON
+    // V_out 来自 ADC 分压采样 (校准后), 非 PMBus I2C
+    // V_ext 保留 PMBus 遥测值作为参考对比
+    // 校准模式数据
+    int calStep = 0;
+    int calAdc = 0;
+    int calPwm = 0;
+    float calTarget = 0.0f;
+    bool calActive = calibration_is_active();
+
+    if (calActive) {
+        int step = calibration_get_current_step(); // 0-based
+        calStep = step + 1; // 转为 1-based 给 App
+        if (calStep < 1) calStep = 1;
+        if (calStep > CALIB_POINTS) calStep = CALIB_POINTS;
+        calTarget = g_calib_targets[calStep - 1];
+        calAdc = ADCSampler::getRawAdc();
+        // 获取当前 V_PWM 通道的占空比
+        calPwm = (int)ledc_get_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+    }
+
     snprintf(g_respBuf, sizeof(g_respBuf),
         "{"
         "\"V_out\":%.3f,\"I_out\":%.3f,"
@@ -486,23 +604,29 @@ static const char* build_full_data_json(void)
         "\"fan_speed\":%.0f,"
         "\"power_on\":%d,"
         "\"V_set\":%.3f,\"I_set\":%.3f,"
-        "\"device_online\":%s"
+        "\"V_mult\":%.4f,\"V_offset\":%.4f,"
+        "\"V_raw\":%.3f,"
+        "\"device_online\":%s,"
+        "\"cal_mode\":%d,\"cal_step\":%d,\"cal_target\":%.2f,\"cal_adc\":%d,\"cal_pwm\":%d"
         "}",
-        PMBus::V_out, PMBus::I_out,
+        ADCSampler::getVoltage(), PMBus::I_out,
         PMBus::V_in, PMBus::I_in,
         PMBus::W_out, PMBus::W_in,
         PMBus::E_out, PMBus::E_in,
-        ADCSampler::getVoltage(),
+        PMBus::V_out,
         PMBus::temperature[0], PMBus::temperature[1], PMBus::temperature[2],
         PMBus::fanSpeed[0],
         PowerControl::isPoweredOn() ? 1 : 0,
         PowerControl::getSetVoltage(), PowerControl::getSetCurrent(),
-        PMBus::isDeviceOnline() ? "true" : "false"
+        ADCSampler::getCalMultiplier(), ADCSampler::getCalOffset(),
+        ADCSampler::getRawVoltage(),
+        PMBus::isDeviceOnline() ? "true" : "false",
+        calActive ? 1 : 0, calStep, calTarget, calAdc, calPwm
     );
     return g_respBuf;
 }
 
-static void send_response(const char* json)
+void send_response(const char* json)
 {
     esp_err_t ret = ble_server_send(json);
     if (ret != ESP_OK) {
@@ -517,17 +641,47 @@ static void send_response(const char* json)
 static void handle_buttons(void)
 {
     static uint64_t lastBtnTime = 0;
+    static uint64_t okPressStart = 0;   // OK 按键按下起始时间 (长按检测)
+    static bool     okWasPressed = false;
     uint64_t now = esp_timer_get_time() / 1000; // ms
-
-    // 简易去抖: 200ms 间隔
-    if ((now - lastBtnTime) < 200) return;
 
     bool btnUp   = (gpio_get_level(BTN_UP)   == 0); // 低电平有效
     bool btnDown = (gpio_get_level(BTN_DOWN) == 0);
     bool btnOk   = (gpio_get_level(BTN_OK)   == 0);
 
-    if (!btnUp && !btnDown && !btnOk) return;
+    // ===== 校准模式: 按键直接路由到校准模块 =====
+    if (calibration_is_active()) {
+        // 校准模式下使用 100ms 去抖 (更快响应)
+        if ((now - lastBtnTime) < 100) return;
+        if (!btnUp && !btnDown && !btnOk) return;
+        lastBtnTime = now;
 
+        calibration_handle_button(btnUp, btnDown, btnOk);
+        return;
+    }
+
+    // ===== 正常模式 =====
+
+    // ---- 长按 OK 检测: 进入校准模式 ----
+    if (btnOk) {
+        if (!okWasPressed) {
+            okWasPressed = true;
+            okPressStart = now;
+        }
+        // 长按 2 秒进入校准
+        if ((now - okPressStart) >= LONG_PRESS_MS) {
+            ESP_LOGI(TAG, "Long press OK detected, entering calibration mode");
+            okWasPressed = false;
+            calibration_start();
+            return;
+        }
+    } else {
+        okWasPressed = false;
+    }
+
+    // ---- 短按处理 (200ms 去抖) ----
+    if ((now - lastBtnTime) < 200) return;
+    if (!btnUp && !btnDown && !btnOk) return;
     lastBtnTime = now;
 
     float vSet = PowerControl::getSetVoltage();
@@ -545,7 +699,7 @@ static void handle_buttons(void)
         ESP_LOGI(TAG, "BTN_DOWN: V_set=%.1fV", vSet);
     }
     else if (btnOk) {
-        // 切换电源开关
+        // 短按 OK: 切换电源开关
         if (PowerControl::isPoweredOn()) {
             PowerControl::powerOff();
             ESP_LOGI(TAG, "BTN_OK: Power OFF");

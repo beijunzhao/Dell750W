@@ -56,6 +56,47 @@
 				</view>
 			</view>
 		</view>
+		<!-- 电压校准 -->
+		<view class="section">
+			<view class="section-header">
+				<text class="section-icon">🔧</text>
+				<text class="section-title">电压校准</text>
+			</view>
+			<view class="info-list">
+				<view class="info-row">
+					<text class="info-key">校准乘数 V_mult</text>
+					<text class="info-value cal-value">{{ calMult.toFixed(4) }}</text>
+				</view>
+				<view class="info-row">
+					<text class="info-key">校准偏置 V_offset</text>
+					<text class="info-value cal-value">{{ calOffset.toFixed(4) }}V</text>
+				</view>
+				<view class="info-row">
+					<text class="info-key">原始电压 V_raw</text>
+					<text class="info-value">{{ vRaw.toFixed(3) }}V</text>
+				</view>
+				<view class="info-row">
+					<text class="info-key">校准后 V_out</text>
+					<text class="info-value cal-out">{{ vOut.toFixed(3) }}V</text>
+				</view>
+			</view>
+			<view class="cal-input-section">
+				<text class="cal-hint">用万用表测量实际输出电压，输入下方进行校准：</text>
+				<view class="cal-input-row">
+					<input class="cal-input" type="digit" v-model="calRefVoltage" placeholder="万用表实测电压值" />
+					<text class="cal-input-unit">V</text>
+				</view>
+				<view class="cal-buttons">
+					<button class="cal-btn cal-btn-apply" :disabled="!connected || !calRefVoltage" @tap="applyCalibration">校准乘数</button>
+					<button class="cal-btn cal-btn-reset" :disabled="!connected" @tap="resetCalibration">恢复默认</button>
+				</view>
+			</view>
+			<view class="cal-nav-section">
+				<button class="cal-nav-btn" :disabled="!connected" @tap="goCalibration">
+					🔧 进入 6 点详细校准
+				</button>
+			</view>
+		</view>
 
 		<!-- 关于 -->
 		<view class="section">
@@ -121,6 +162,11 @@
 				connected: false,
 				statusText: '未连接',
 				voltageMax: 12.0,
+				calMult: 1.0,
+				calOffset: 0.0,
+				vRaw: 0,
+				vOut: 0,
+				calRefVoltage: '' ,
 				currentMax: 62.5,
 				deviceInfo: {
 					mfr_id: '',
@@ -148,9 +194,12 @@
 			this._loadDeviceInfo()
 		},
 		onShow() {
-			// 每次页面显示时同步连接状态
 			this.connected = bleService.connected
 			this.statusText = bleService.connected ? '已连接' : '未连接'
+			this._loadCalibration()
+		},
+		onHide() {
+			// 离开页面时不取消 onData（全局回调），让首页仍能接收数据
 		},
 		methods: {
 
@@ -263,6 +312,69 @@
 				}
 				uni.reLaunch({
 					url: urls[tab]
+				})
+			},
+
+			/**
+			 * 从缓存加载校准参数
+			 */
+			_loadCalibration() {
+				const data = bleService.getLastData()
+				if (data) {
+					if (data.V_mult !== undefined) this.calMult = data.V_mult
+					if (data.V_offset !== undefined) this.calOffset = data.V_offset
+					if (data.V_raw !== undefined) this.vRaw = data.V_raw
+					if (data.V_out !== undefined) this.vOut = data.V_out
+				}
+			},
+
+			/**
+			 * 应用电压校准：根据万用表实测值计算乘数
+			 */
+			async applyCalibration() {
+				if (!this.connected || !this.calRefVoltage) return
+				const refV = parseFloat(this.calRefVoltage)
+				if (isNaN(refV) || refV <= 0) {
+					uni.showToast({ title: '请输入有效的电压值', icon: 'error' })
+					return
+				}
+				if (this.vRaw <= 0) {
+					uni.showToast({ title: '无原始电压数据', icon: 'error' })
+					return
+				}
+				const mult = refV / this.vRaw
+				try {
+					await bleService.calibrate(mult, 0)
+					this.calMult = mult
+					this.calOffset = 0
+					uni.showToast({ title: '校准成功', icon: 'success' })
+				} catch (err) {
+					uni.showToast({ title: '校准失败', icon: 'error' })
+				}
+			},
+
+			/**
+			 * 恢复默认校准参数
+			 */
+			async resetCalibration() {
+				if (!this.connected) return
+				try {
+					await bleService.calibrate(1.0, 0.0)
+					this.calMult = 1.0
+					this.calOffset = 0.0
+					this.calRefVoltage = ''
+					uni.showToast({ title: '已恢复默认', icon: 'success' })
+				} catch (err) {
+					uni.showToast({ title: '重置失败', icon: 'error' })
+				}
+			},
+
+			/**
+				* 跳转到 6 点详细校准页面
+				*/
+			goCalibration() {
+				uni.navigateTo({
+					url: '/pages/calibration/calibration'
 				})
 			}
 		}
@@ -412,4 +524,95 @@
 	.nav-ble.connected {
 		opacity: 1;
 	}
+	/* 电压校准 */
+	.cal-value {
+		color: #ffb74d;
+		font-weight: 600;
+	}
+
+	.cal-out {
+		color: #4fc3f7;
+		font-weight: 600;
+	}
+
+	.cal-input-section {
+		margin-top: 24rpx;
+		padding-top: 20rpx;
+		border-top: 1px solid #2a2a5e;
+	}
+
+	.cal-hint {
+		font-size: 24rpx;
+		color: #888;
+		margin-bottom: 16rpx;
+		display: block;
+	}
+
+	.cal-input-row {
+		display: flex;
+		align-items: center;
+		margin-bottom: 20rpx;
+	}
+
+	.cal-input {
+		flex: 1;
+		padding: 16rpx 20rpx;
+		background: #0f0f23;
+		border: 1px solid #2a2a5e;
+		border-radius: 10rpx;
+		color: #e0e0e0;
+		font-size: 28rpx;
+	}
+
+	.cal-input-unit {
+		margin-left: 12rpx;
+		font-size: 28rpx;
+		color: #888;
+	}
+
+	.cal-buttons {
+		display: flex;
+		gap: 16rpx;
+	}
+
+	.cal-btn {
+		flex: 1;
+		padding: 20rpx;
+		border-radius: 12rpx;
+		font-size: 26rpx;
+		border: none;
+		color: #fff;
+	}
+
+	.cal-btn-apply {
+		background: linear-gradient(135deg, #ffb74d, #f57c00);
+	}
+
+	.cal-btn-reset {
+		background: linear-gradient(135deg, #757575, #424242);
+	}
+
+	.cal-btn[disabled] {
+		opacity: 0.4;
+	}
+
+	/* 导航到详细校准页面 */
+	.cal-nav-section {
+		margin-top: 20rpx;
+	}
+
+	.cal-nav-btn {
+		width: 100%;
+		padding: 24rpx;
+		background: linear-gradient(135deg, #ff8f00, #e65100);
+		color: #fff;
+		border-radius: 14rpx;
+		font-size: 28rpx;
+		border: none;
+	}
+
+	.cal-nav-btn[disabled] {
+		opacity: 0.4;
+	}
 </style>
+

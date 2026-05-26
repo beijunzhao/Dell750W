@@ -5,7 +5,7 @@
  * 内部隐藏 PWM→DAC 数学转换逻辑。
  *
  * 安全关键:
- *   - 电压控制为反向逻辑: PWM占空比=0 时输出最高电压(12V)!
+ *   - 电压控制为正向逻辑: PWM占空比=0 时输出 0V, PWM占空比~90.9% 时输出 12V
  *   - 电流控制为正向逻辑: PWM占空比 对应 0~62.5A
  */
 #ifndef POWER_CONTROL_H
@@ -20,7 +20,7 @@ class PowerControl {
 public:
     /**
      * 初始化电源控制模块 (仅在 setup 安全时序中调用)
-     * 注意: 此函数将 SW_CTRL 设为 LOW(关机), V_PWM 设为最高占空比(3.0V→0V输出), I_PWM 设为0
+     * 注意: 此函数将 SW_CTRL 设为 LOW(关机), V_PWM 设为 0 (0V输出), I_PWM 设为0
      */
     static esp_err_t init();
 
@@ -38,8 +38,8 @@ public:
      * @param voltage 目标电压 (0.0 ~ 12.0V)
      * @return ESP_OK 或 ESP_ERR_INVALID_ARG
      *
-     * 内部公式(反向逻辑):
-     *   V_DAC = 3.0 - (voltage / 12.0) * 3.0
+     * 内部公式(正向逻辑):
+     *   V_DAC = (voltage / 12.0) * 3.0
      *   PWM_duty = (V_DAC / 3.3) * PWM_MAX_DUTY
      */
     static esp_err_t setVoltage(float voltage);
@@ -60,6 +60,13 @@ public:
 
     /** 获取当前设定的电流值 */
     static float getSetCurrent() { return _currentSet; }
+
+    /**
+     * @brief 直接设置 PWM 占空比 (校准模块使用)
+     * @param channel LEDC 通道
+     * @param duty    占空比 (0 ~ PWM_MAX_DUTY)
+     */
+    static void setPwmDuty(ledc_channel_t channel, uint32_t duty);
 
 private:
     static float _voltageSet;

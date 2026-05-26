@@ -42,7 +42,9 @@
 // ---------- 电源参数 ----------
 #define PSU_VOLTAGE_MAX   12.0f       // 电源最高输出电压
 #define PSU_CURRENT_MAX   62.5f       // 电源最高输出电流 (750W / 12V)
-#define ADC_DIVIDER_RATIO 5.094f      // 分压比: (20.47+5)/5
+#define ADC_DIVIDER_RATIO 5.014f      // 分压比: (470+10k+10k+5.1k)/5.1k = 25570/5100
+#define ADC_CAL_MULTIPLIER 1.000f     // ADC 校准乘数 (默认 1.0, 通过实测修正)
+#define ADC_CAL_OFFSET     0.000f     // ADC 校准偏置 (默认 0.0V)
 #define ADC_SAMPLE_COUNT  10          // 移动平均滤波采样数
 
 // ---------- PMBus ----------

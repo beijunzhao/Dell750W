@@ -11,6 +11,8 @@
  *   请求: {"cmd":"set","V_set":12.0}   → 设定电压
  *   请求: {"cmd":"set","I_set":10.0}   → 设定电流
  *   请求: {"cmd":"set","power":1}      → 开机 (1) / 关机 (0)
+ *   请求: {"cmd":"calibrate","V_mult":1.005,"V_offset":-0.05}  → 电压校准
+ *   请求: {"cmd":"cal_mode","enter":1} → 进入/退出校准模式
  *   请求: {"cmd":"get_info"}           → 获取设备信息
  */
 
@@ -888,6 +890,55 @@ class BleService {
     return this.send({ cmd: 'clear_faults' })
   }
 
+
+  /**
+   * 进入电压校准模式
+   */
+  enterCalMode() {
+    return this.send({ cmd: 'cal_mode', enter: 1 })
+  }
+
+  /**
+   * 退出电压校准模式
+   */
+  exitCalMode() {
+    return this.send({ cmd: 'cal_mode', enter: 0 })
+  }
+
+  /**
+   * 电压校准
+   * @param {number} multiplier 乘数修正 (默认 1.0)
+   * @param {number} offset 偏置修正 (默认 0.0V)
+   */
+  calibrate(multiplier, offset) {
+    return this.send({
+      cmd: 'calibrate',
+      V_mult: parseFloat(multiplier.toFixed(4)),
+      V_offset: parseFloat(offset.toFixed(4))
+    })
+  }
+
+  /**
+   * 校准模式: PWM 增加 (UP 按键)
+   */
+  calPwmUp() {
+    return this.send({ cmd: 'cal_pwm_adjust', dir: 1 })
+  }
+
+  /**
+   * 校准模式: PWM 减少 (DOWN 按键)
+   */
+  calPwmDown() {
+    return this.send({ cmd: 'cal_pwm_adjust', dir: -1 })
+  }
+
+  /**
+   * 校准模式: 确认当前校准点 (OK 按键)
+   */
+  calConfirm() {
+    return this.send({ cmd: 'cal_confirm' })
+  }
+
   /**
    * 设置数据接收回调
    * 注册后立即用缓存数据回掉一次，避免新页面需等待下次推送才有数据显示
@@ -958,6 +1009,14 @@ class BleService {
         console.warn('[BLE] 自动获取设备信息失败:', err)
       })
     }, 500)
+  }
+
+  /**
+   * 获取最后一次收到的遥测数据（供设置页读取校准参数等）
+   * @returns {Object|null}
+   */
+  getLastData() {
+    return this._lastData
   }
 
   /**

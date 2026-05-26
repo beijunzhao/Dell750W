@@ -26,8 +26,8 @@ esp_err_t PowerControl::init()
     ESP_LOGI(TAG, "SW_CTRL initialized LOW (safe)");
 
     // 第二步: 安全偏置
-    // V_PWM 输出最高占空比 (~90.9%, 即 3.0V DAC → 0V 物理输出)
-    ret = _pwmInit(V_PWM, LEDC_CHANNEL_0, PWM_DUTY_3V0);
+    // V_PWM 输出 0% 占空比 (0V DAC → 0V 物理输出)
+    ret = _pwmInit(V_PWM, LEDC_CHANNEL_0, 0);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to init V_PWM");
         return ret;
@@ -40,8 +40,7 @@ esp_err_t PowerControl::init()
         return ret;
     }
 
-    ESP_LOGI(TAG, "PWM initialized: V_PWM=%.1f%% (safe: ~0V output), I_PWM=0%%",
-             (float)PWM_DUTY_3V0 / PWM_MAX_DUTY * 100.0f);
+    ESP_LOGI(TAG, "PWM initialized: V_PWM=0%% (safe: ~0V output), I_PWM=0%%");
 
     _powerState = false;
     _voltageSet = 0.0f;
@@ -95,10 +94,10 @@ esp_err_t PowerControl::setVoltage(float voltage)
 
     _voltageSet = voltage;
 
-    // 反向逻辑: V_DAC = 3.0 - (V_target / 12.0) * 3.0
-    float vDac = V_DAC_MAX - (voltage / PSU_VOLTAGE_MAX) * V_DAC_MAX;
+    // 正向逻辑: V_DAC = (V_target / 12.0) * 3.0
+    float vDac = (voltage / PSU_VOLTAGE_MAX) * V_DAC_MAX;
 
-    // PWM 占空比 = (V_DAC / 3.3) * 8191
+    // PWM 占空比 = (V_DAC / 3.3) * 2047
     uint32_t duty = (uint32_t)((vDac / MCU_VDD) * PWM_MAX_DUTY);
 
     // 钳位到有效范围
@@ -127,6 +126,12 @@ esp_err_t PowerControl::setCurrent(float current)
 
     _pwmSetDuty(LEDC_CHANNEL_1, duty);
     return ESP_OK;
+}
+
+void PowerControl::setPwmDuty(ledc_channel_t channel, uint32_t duty)
+{
+    if (duty > PWM_MAX_DUTY) duty = PWM_MAX_DUTY;
+    _pwmSetDuty(channel, duty);
 }
 
 // ---------- 私有方法 ----------

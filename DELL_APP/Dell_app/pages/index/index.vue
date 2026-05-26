@@ -183,9 +183,12 @@
 			<view class="status-chip" :class="{ ok: powerOn }">
 				{{ powerOn ? '运行中' : '已关闭' }}
 			</view>
-			<view class="status-chip" :class="{ ok: connected }">
-				{{ connected ? '设备在线' : '设备离线' }}
+			<view class="status-chip" :class="{ ok: deviceOnline }">
+				{{ deviceOnline ? '设备在线' : '设备离线' }}
 			</view>
+		<view class="status-chip ok" style="font-size:20rpx">
+					{{ calText }}
+				</view>
 		</view>
 
 		<!-- 自定义设置弹窗 -->
@@ -212,6 +215,15 @@
 					</view>
 					<view class="modal-range">
 						<text class="modal-range-text">范围: 0 ~ {{ modalMax }}{{ modalUnit }}</text>
+					</view>
+					<!-- 电压设置弹窗中增加校准入口 -->
+					<view v-if="modalType === 'voltage'" class="modal-cal-section">
+						<view class="modal-cal-divider"></view>
+						<view class="modal-cal-btn" @tap="goCalibration">
+							<text class="modal-cal-icon">🔧</text>
+							<text class="modal-cal-text">电压校准 (6 点详细校准)</text>
+							<text class="modal-cal-arrow">›</text>
+						</view>
 					</view>
 				</view>
 				<view class="modal-footer">
@@ -279,6 +291,9 @@
 		data() {
 			return {
 				connected: false,
+				deviceOnline: false,
+				calMult: 1.0,
+				calOffset: 0.0,
 				statusText: '点击连接设备',
 				powerOn: false,
 				voltageSet: 0,
@@ -323,6 +338,15 @@
 			bleService.onData((data) => {
 				if (data.power_on !== undefined) {
 					this.powerOn = data.power_on === 1
+				}
+					if (data.device_online !== undefined) {
+						this.deviceOnline = data.device_online === true || data.device_online === "true"
+					}
+					if (data.V_mult !== undefined) {
+						this.calMult = data.V_mult
+					}
+					if (data.V_offset !== undefined) {
+						this.calOffset = data.V_offset
 				}
 				if (data.V_out !== undefined) {
 					this.voltageSet = data.V_out
@@ -378,6 +402,12 @@
 			},
 			currentPercent() {
 				return Math.min((this.currentSet / this.currentMax) * 100, 100)
+			},
+			calText() {
+				const mult = this.calMult || 1.0
+				const off = this.calOffset || 0.0
+				const offsetStr = off >= 0 ? "+" + off.toFixed(2) : off.toFixed(2)
+				return "电压校准: " + mult.toFixed(4) + "x " + offsetStr + "V"
 			},
 			efficiencyText() {
 				const win = this.powerData.W_in || 0
@@ -574,6 +604,12 @@
 					uni.showToast({ title: '设定失败', icon: 'error' })
 				}
 			},
+				goCalibration() {
+					this.closeModal()
+					uni.navigateTo({
+						url: '/pages/calibration/calibration'
+					})
+				},
 
 			async clearFaults() {
 				if (!this.connected) {
@@ -1365,10 +1401,11 @@
 		bottom: 0;
 		background: rgba(0, 0, 0, 0.6);
 		display: flex;
-		align-items: center;
+		align-items: flex-start;
 		justify-content: center;
 		z-index: 999;
 		backdrop-filter: blur(4px);
+		padding-top: 120rpx;
 	}
 
 	.modal-dialog {
@@ -1773,6 +1810,48 @@
 		background: rgba(255, 255, 255, 0.08);
 		color: #ff5252;
 		border: 1px solid rgba(255, 82, 82, 0.3);
+	}
+
+	/* ===== 电压设置弹窗 - 校准入口 ===== */
+	.modal-cal-section {
+		margin-top: 20rpx;
+	}
+
+	.modal-cal-divider {
+		height: 1px;
+		background: rgba(255, 255, 255, 0.06);
+		margin-bottom: 20rpx;
+	}
+
+	.modal-cal-btn {
+		display: flex;
+		align-items: center;
+		padding: 24rpx 20rpx;
+		background: rgba(255, 143, 0, 0.08);
+		border-radius: 16rpx;
+		border: 1px solid rgba(255, 143, 0, 0.2);
+	}
+
+	.modal-cal-btn:active {
+		background: rgba(255, 143, 0, 0.15);
+	}
+
+	.modal-cal-icon {
+		font-size: 36rpx;
+		margin-right: 16rpx;
+	}
+
+	.modal-cal-text {
+		flex: 1;
+		font-size: 26rpx;
+		color: #ffb74d;
+		font-weight: 500;
+	}
+
+	.modal-cal-arrow {
+		font-size: 36rpx;
+		color: #ffb74d;
+		opacity: 0.6;
 	}
 
 </style>

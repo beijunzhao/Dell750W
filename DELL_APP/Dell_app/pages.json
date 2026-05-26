@@ -23,6 +23,14 @@
 				"navigationBarBackgroundColor": "#1a1a2e",
 				"navigationBarTextStyle": "white"
 			}
+		},
+		{
+			"path": "pages/calibration/calibration",
+			"style": {
+				"navigationBarTitleText": "电压校准",
+				"navigationBarBackgroundColor": "#ff8f00",
+				"navigationBarTextStyle": "white"
+			}
 		}
 	],
 	"globalStyle": {
