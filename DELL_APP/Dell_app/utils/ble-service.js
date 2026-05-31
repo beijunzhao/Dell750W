@@ -36,6 +36,7 @@ class BleService {
     this._onDeviceListCallback = null  // 设备列表变化回调
     this._receiveBuffer = ''
     this._initialized = false  // 防止重复初始化
+    this._onBleOffCallback = null  // 蓝牙未开启回调
     this._connectionStateChangeRegistered = false  // 防止重复注册连接状态监听
     this._lastData = null  // 缓存最后一条数据，用于新页面注册时立即回掉
     this._currentConnectionSessionId = 0  // 当前连接 Session ID，断线重连时更新，旧监听器自动失效
@@ -63,11 +64,19 @@ class BleService {
 
   /**
    * 初始化蓝牙模块（全局只执行一次）
+   *
+   * 流程：
+   * 1. Android 12+ → 先请求运行时权限（BLUETOOTH_SCAN / BLUETOOTH_CONNECT / 定位）
+   * 2. 权限就绪 → 调用 uni.openBluetoothAdapter 打开蓝牙适配器
+   * 3. 蓝牙未开启（errCode 10001）→ 触发系统级蓝牙开启请求
+   * 4. 降级方案 → uni.showModal 引导用户手动开启
+   *
+   * @returns {Promise<boolean>} 初始化成功返回 true，失败（蓝牙未开启等）返回 false
    */
   init() {
     if (this._initialized) {
       console.log('[BLE] 蓝牙适配器已初始化，跳过')
-      return
+      return Promise.resolve(true)
     }
     this._initialized = true
 
@@ -101,14 +110,281 @@ class BleService {
       })
     }
 
+    // 获取平台信息
+    const sysInfo = uni.getSystemInfoSync()
+    const platform = sysInfo.platform.toLowerCase() // 'android' | 'ios' | 'devtools'
+
+    // ===== 第一步：请求蓝牙相关运行时权限（Android 12+ 必需） =====
+    return new Promise((resolve) => {
+      this._requestBlePermissions(platform, () => {
+        // ===== 第二步：权限就绪，打开蓝牙适配器 =====
+        this._openAdapter(platform, resolve)
+      })
+    })
+  }
+
+  /**
+   * 请求蓝牙相关运行时权限（Android 12+ 必需）
+   * @param {string} platform 'android' | 'ios' | 'devtools'
+   * @param {Function} onReady 权限就绪回调
+   */
+  _requestBlePermissions(platform, onReady) {
+    // iOS 和 开发者工具 不需要运行时权限请求
+    if (platform !== 'android') {
+      onReady()
+      return
+    }
+
+    // ===== Android 12+ (API 31+) 动态权限申请 =====
+    // 使用 plus.android.requestPermissions (Native.js) 替代 uni.requestSystemPermission，
+    // 因为 Native.js 方式更底层、兼容性更好，能确保 BLUETOOTH_CONNECT 权限就绪，
+    // 避免后续 Native.js 调用 BluetoothAdapter.ACTION_REQUEST_ENABLE 时抛出 SecurityException。
+    try {
+      if (typeof plus.android.requestPermissions === 'function') {
+        const permissions = [
+          'android.permission.BLUETOOTH_SCAN',
+          'android.permission.BLUETOOTH_CONNECT',
+          'android.permission.ACCESS_FINE_LOCATION'
+        ]
+
+        plus.android.requestPermissions(
+          permissions,
+          (result) => {
+            // result: { granted: number[], denied: number[], deniedAlways: number[] }
+            console.log('[BLE] Native.js 权限请求结果:', JSON.stringify(result))
+
+            const grantedList = result.granted || []
+            const deniedList = result.denied || []
+            const deniedAlwaysList = result.deniedAlways || []
+
+            // 检查 BLUETOOTH_CONNECT 是否被授予（这是 Native.js 唤醒蓝牙必需权限）
+            const hasBluetoothConnect = grantedList.some(
+              p => p === 'android.permission.BLUETOOTH_CONNECT' || p === 33  // 33 = BLUETOOTH_CONNECT 的常量值
+            )
+
+            if (hasBluetoothConnect) {
+              console.log('[BLE] BLUETOOTH_CONNECT 权限已授予，继续初始化')
+              onReady()
+            } else if (deniedAlwaysList.length > 0) {
+              // 用户勾选了"不再询问"，必须引导去设置页
+              console.warn('[BLE] 权限被永久拒绝:', JSON.stringify(deniedAlwaysList))
+              this._notifyStatus('需要蓝牙权限')
+              this._showPermissionGuide()
+            } else {
+              // 权限被拒绝但未勾选"不再询问"，可以再次尝试
+              console.warn('[BLE] 权限被拒绝（可重试）:', JSON.stringify(deniedList))
+              // 给用户一个提示，然后继续尝试（系统可能还会弹窗）
+              uni.showToast({ title: '请授予蓝牙权限', icon: 'none' })
+              onReady()
+            }
+          },
+          (error) => {
+            // plus.android.requestPermissions 本身调用失败
+            console.error('[BLE] plus.android.requestPermissions 调用异常:', JSON.stringify(error))
+            // 降级：尝试继续，系统可能在 openBluetoothAdapter 时弹窗
+            onReady()
+          }
+        )
+      } else {
+        // 低版本 HBuilderX 不支持 plus.android.requestPermissions
+        console.log('[BLE] 当前环境不支持 plus.android.requestPermissions，跳过运行时权限请求')
+        onReady()
+      }
+    } catch (e) {
+      console.error('[BLE] Native.js 权限请求异常，降级继续:', e)
+      onReady()
+    }
+  }
+
+  /**
+   * 打开蓝牙适配器（核心方法）
+   * @param {string} platform 'android' | 'ios' | 'devtools'
+   */
+  _openAdapter(platform, onComplete) {
     uni.openBluetoothAdapter({
       success: () => {
         console.log('[BLE] 蓝牙适配器初始化成功')
         this._notifyStatus('蓝牙就绪')
+        // 通知 init() 的 Promise：初始化成功，允许后续 autoReconnect
+        if (onComplete) onComplete(true)
       },
       fail: (err) => {
-        console.error('[BLE] 蓝牙适配器初始化失败:', err)
-        this._notifyStatus('蓝牙初始化失败，请检查蓝牙权限')
+        console.log('[BLE] 蓝牙初始化彻底失败:', err)
+        const errCode = err.errCode !== undefined ? err.errCode : err.code
+        const errMsg = (err.errMsg || '').toLowerCase()
+
+        // ===== 错误码分类处理 =====
+        // 注意: 部分 Android 系统（如小米）errCode 可能为 undefined，需通过 errMsg 字符串匹配
+        const isBleOff = errCode === 10001 ||
+                         (errMsg.indexOf('10001') >= 0) ||
+                         (errMsg.indexOf('not turn on') >= 0) ||
+                         (errMsg.indexOf('bluetooth is not on') >= 0) ||
+                         (errMsg.indexOf('bluetooth not open') >= 0) ||
+                         (errMsg.indexOf('not available') >= 0)
+
+        const isPermissionDenied = errCode === 10013 ||
+                                   (errMsg.indexOf('10013') >= 0) ||
+                                   (errMsg.indexOf('permission') >= 0) ||
+                                   (errMsg.indexOf('denied') >= 0) ||
+                                   (errMsg.indexOf('reject') >= 0)
+
+        if (isBleOff) {
+          // 错误码 10001: 蓝牙未开启（Android/iOS 通用）
+          console.log('[BLE] 检测到蓝牙未开启，准备调用 Native.js 唤醒...')
+
+          // 解决 this 指向可能丢失的问题
+          const platform = uni.getSystemInfoSync().platform.toLowerCase()
+          if (typeof this._handleBleOff === 'function') {
+            this._handleBleOff(platform)
+          } else {
+            console.error('[BLE] 找不到 _handleBleOff 方法，唤醒失败！')
+          }
+
+          // 关键阻断：蓝牙未开启时，通知 init() 返回 false，截断后续 autoReconnect
+          if (onComplete) onComplete(false)
+        } else if (isPermissionDenied) {
+          // 错误码 10013: 未授予必要权限（Android）
+          this._notifyStatus('缺少蓝牙权限')
+          this._showPermissionGuide()
+          if (onComplete) onComplete(false)
+        } else {
+          // 其他未知错误 - 弹窗显示完整错误信息用于诊断
+          console.error('[BLE] 蓝牙初始化彻底失败:', err)
+          uni.showModal({
+            title: '蓝牙异常拦截',
+            content: '底层报错信息: ' + JSON.stringify(err),
+            showCancel: false
+          })
+          this._notifyStatus('蓝牙不可用')
+          if (onComplete) onComplete(false)
+        }
+      }
+    })
+  }
+
+  /**
+   * 处理蓝牙未开启的情况
+   * 尝试触发系统级蓝牙开启弹窗
+   * @param {string} platform 'android' | 'ios' | 'devtools'
+   */
+  _handleBleOff(platform) {
+    if (platform === 'android') {
+      // === Android 策略：使用 Native.js 触发系统原生蓝牙开启弹窗 ===
+      // 通过 plus.android 调用 Android 原生 API：
+      //   BluetoothAdapter.ACTION_REQUEST_ENABLE 会弹出系统级底部对话框
+      //   用户点击"允许"后系统自动开启蓝牙，无需跳转设置页
+      //
+      // 注意：调用此方法前，_requestBlePermissions 必须已成功申请 BLUETOOTH_CONNECT 权限，
+      // 否则 startActivity 会抛出 SecurityException。
+      //
+      // 坑点记录：不要用 plus.android.importClass('android.bluetooth.BluetoothAdapter')
+      // 去反射获取 ACTION_REQUEST_ENABLE 静态常量，某些 ROM 会返回 undefined 导致崩溃。
+      // 直接写死底层魔法字符串 'android.bluetooth.adapter.action.REQUEST_ENABLE' 最稳。
+      try {
+        const main = plus.android.runtimeMainActivity()
+        const Intent = plus.android.importClass('android.content.Intent')
+        // 直接传入安卓底层原生字符串，避开类属性反射坑
+        const intent = new Intent('android.bluetooth.adapter.action.REQUEST_ENABLE')
+        main.startActivity(intent)
+
+        console.log('[BLE] 已触发系统原生蓝牙开启弹窗')
+
+        // 延迟检测蓝牙是否已开启（给用户操作时间）
+        setTimeout(() => {
+          uni.openBluetoothAdapter({
+            success: () => {
+              console.log('[BLE] 用户已通过系统弹窗开启蓝牙')
+              this._notifyStatus('蓝牙就绪')
+              uni.showToast({ title: '蓝牙已开启', icon: 'success' })
+              this.autoReconnect()
+            },
+            fail: () => {
+              console.warn('[BLE] 用户未通过系统弹窗开启蓝牙')
+              this._showBleSettingsGuide()
+            }
+          })
+        }, 3000)
+      } catch (e) {
+        // Native.js 调用失败时的降级方案
+        // 可能原因：BLUETOOTH_CONNECT 权限未授予、设备不支持等
+        console.error("【极其重要】Native.js 唤醒蓝牙严重报错:", e.message || e)
+        console.error('[BLE] Native.js 调用失败，降级为 showModal 方案:', e)
+        uni.showModal({
+          title: '需要开启蓝牙',
+          content: '本应用需要通过蓝牙连接电源设备，请允许开启蓝牙。',
+          confirmText: '开启蓝牙',
+          cancelText: '暂不开启',
+          success: (res) => {
+            if (res.confirm) {
+              uni.openBluetoothAdapter({
+                success: () => {
+                  console.log('[BLE] 用户已开启蓝牙')
+                  this._notifyStatus('蓝牙就绪')
+                  uni.showToast({ title: '蓝牙已开启', icon: 'success' })
+                  this.autoReconnect()
+                },
+                fail: (retryErr) => {
+                  console.warn('[BLE] 用户仍未开启蓝牙:', JSON.stringify(retryErr))
+                  this._showBleSettingsGuide()
+                }
+              })
+            }
+          }
+        })
+      }
+    } else if (platform === 'ios') {
+      // === iOS 策略 ===
+      // iOS 上无法通过 Native.js 触发系统蓝牙开启弹窗，使用 showModal 引导
+      uni.showModal({
+        title: '蓝牙未开启',
+        content: '检测到蓝牙未开启，请前往系统设置中打开蓝牙',
+        showCancel: false,
+        confirmText: '我知道了'
+      })
+    } else {
+      // 开发者工具
+      this._notifyStatus('蓝牙未开启（请使用真机调试）')
+    }
+  }
+
+  /**
+   * 引导用户去系统设置页开启蓝牙
+   */
+  _showBleSettingsGuide() {
+    uni.showModal({
+      title: '无法开启蓝牙',
+      content: '无法自动开启蓝牙，请前往系统设置中手动开启蓝牙后重试。',
+      confirmText: '去设置',
+      cancelText: '稍后',
+      success: (res) => {
+        if (res.confirm) {
+          uni.openAppSetting({
+            success: () => {
+              console.log('[BLE] 已跳转到系统设置页')
+            }
+          })
+        }
+      }
+    })
+  }
+
+  /**
+   * 引导用户去系统设置页授予权限
+   */
+  _showPermissionGuide() {
+    uni.showModal({
+      title: '需要蓝牙权限',
+      content: '本应用需要蓝牙权限才能连接电源设备，请在设置中授予「附近设备」或「位置信息」权限。',
+      confirmText: '去设置',
+      cancelText: '稍后',
+      success: (res) => {
+        if (res.confirm) {
+          uni.openAppSetting({
+            success: () => {
+              console.log('[BLE] 已跳转到系统设置页')
+            }
+          })
+        }
       }
     })
   }
@@ -958,6 +1234,15 @@ class BleService {
    */
   onStatus(callback) {
     this._onStatusCallback = callback
+  }
+
+  /**
+   * 设置蓝牙未开启回调
+   * 当蓝牙适配器初始化失败且检测到蓝牙未开启时触发
+   * @param {Function} callback 回调函数
+   */
+  onBleOff(callback) {
+    this._onBleOffCallback = callback
   }
 
   /**

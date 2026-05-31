@@ -186,9 +186,6 @@
 			<view class="status-chip" :class="{ ok: deviceOnline }">
 				{{ deviceOnline ? '设备在线' : '设备离线' }}
 			</view>
-		<view class="status-chip ok" style="font-size:20rpx">
-					{{ calText }}
-				</view>
 		</view>
 
 		<!-- 自定义设置弹窗 -->
@@ -291,10 +288,8 @@
 		data() {
 			return {
 				connected: false,
-				deviceOnline: false,
-				calMult: 1.0,
-				calOffset: 0.0,
-				statusText: '点击连接设备',
+					deviceOnline: false,
+					statusText: '点击连接设备',
 				powerOn: false,
 				voltageSet: 0,
 				currentSet: 0,
@@ -340,14 +335,8 @@
 					this.powerOn = data.power_on === 1
 				}
 					if (data.device_online !== undefined) {
-						this.deviceOnline = data.device_online === true || data.device_online === "true"
-					}
-					if (data.V_mult !== undefined) {
-						this.calMult = data.V_mult
-					}
-					if (data.V_offset !== undefined) {
-						this.calOffset = data.V_offset
-				}
+							this.deviceOnline = data.device_online === true || data.device_online === "true"
+						}
 				if (data.V_out !== undefined) {
 					this.voltageSet = data.V_out
 				}
@@ -402,12 +391,6 @@
 			},
 			currentPercent() {
 				return Math.min((this.currentSet / this.currentMax) * 100, 100)
-			},
-			calText() {
-				const mult = this.calMult || 1.0
-				const off = this.calOffset || 0.0
-				const offsetStr = off >= 0 ? "+" + off.toFixed(2) : off.toFixed(2)
-				return "电压校准: " + mult.toFixed(4) + "x " + offsetStr + "V"
 			},
 			efficiencyText() {
 				const win = this.powerData.W_in || 0

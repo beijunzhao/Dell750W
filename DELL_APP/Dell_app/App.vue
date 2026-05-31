@@ -5,11 +5,20 @@
 		onLaunch: function() {
 			console.log('数控电源 App 启动')
 			// 全局只初始化一次蓝牙（各页面不再重复调用）
-			bleService.init()
-			// 初始化后自动重连上次连接的设备
-			setTimeout(() => {
-				bleService.autoReconnect()
-			}, 1000)  // 延迟1秒，等待蓝牙适配器初始化完成
+			// ble-service.js 内部已包含完整的权限请求和蓝牙开启引导流程
+			// init() 返回 Promise<boolean>，true=初始化成功，false=失败（蓝牙未开启等）
+			bleService.init().then((success) => {
+				if (success) {
+					// 蓝牙适配器初始化成功，延迟1秒后自动重连上次连接的设备
+					console.log('[BLE] 初始化成功，准备自动重连上次设备')
+					setTimeout(() => {
+						bleService.autoReconnect()
+					}, 1000)
+				} else {
+					// 蓝牙未开启或权限不足，不执行 autoReconnect，避免 10000 (not init) 错误
+					console.log('[BLE] 初始化未完成（蓝牙未开启/权限不足），跳过自动重连')
+				}
+			})
 		},
 		onShow: function() {
 			console.log('App Show')

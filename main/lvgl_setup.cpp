@@ -37,7 +37,7 @@ esp_err_t lvgl_setup_init(esp_lcd_panel_io_handle_t io,
     // 2. 初始化 LVGL Port (创建渲染任务 + 定时器)
     lvgl_port_cfg_t port_cfg = {
         .task_priority    = 4,
-        .task_stack       = 4096,
+        .task_stack       = 8192,
         .task_affinity    = -1,
         .task_max_sleep_ms = 500,
         .timer_period_ms  = 5,
