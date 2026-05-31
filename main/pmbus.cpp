@@ -15,11 +15,17 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_rom_sys.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 
 static const char* TAG = "PMBus";
+
+// NVS 命名空间和键名
+static const char* NVS_NAMESPACE = "calibration";
+static const char* NVS_KEY_I_CAL_TABLE = "i_cal_tbl";
 
 // I2C 超时 (ms), PMBus 设备可能有时钟拉伸, 50ms 匹配 Arduino Wire 库默认值
 static const int I2C_TIMEOUT_MS = 50;
@@ -34,6 +40,12 @@ float PMBus::W_in = 0, PMBus::W_out = 0, PMBus::E_in = 0, PMBus::E_out = 0;
 float PMBus::temperature[3] = {}, PMBus::fanSpeed[2] = {};
 char  PMBus::mfrId[32] = {}, PMBus::mfrModel[32] = {}, PMBus::mfrRevision[16] = {};
 char  PMBus::mfrLocation[32] = {}, PMBus::mfrDate[16] = {}, PMBus::mfrSerial[32] = {};
+
+// 电流校准表 (6 点, 默认全零)
+PMBus::i_calib_point_t PMBus::_iCalTable[PMBus::I_CALIB_POINTS] = {};
+
+// 目标电流数组
+const float PMBus::I_CALIB_TARGETS[PMBus::I_CALIB_POINTS] = {0.0f, 5.0f, 15.0f, 30.0f, 45.0f, 60.0f};
 
 // 全局 JSON buffer (避免栈上分配大buffer)
 static char _jsonBuf[1024];
@@ -116,13 +128,15 @@ int PMBus::scan()
     // 检查设备在线 (使用 transmit_receive, 不使用 probe)
     if (!isDeviceOnline()) return 0;
 
-    // 首次扫描: 读取厂商信息和 VOUT 格式
+    // 首次扫描: 读取厂商信息和 VOUT 格式, 加载电流校准表
     if (!_bReadMFR) {
         _readMFR();
         _readCoefficients(&_coeffM, &_coeffB, &_coeffR);
         _isVOutLinear = (_readVoutMode() >= 0);
         _exponent = -1; // 电源约定 exponent = -1
         _writeByte(PMBUS_WRITE_PROTECT, 0x00); // 解除写保护
+        // 从 NVS 加载电流校准表
+        loadICalTableFromNVS();
     }
 
     // 读取遥测数据, 每个寄存器间加 1ms 延时 (匹配参考实现)
@@ -144,7 +158,11 @@ int PMBus::scan()
     }
     esp_rom_delay_us(1000);
 
-    I_out = _readLinear(PMBUS_READ_IOUT);
+    // 读取原始电流, 然后应用 6 点查表校准
+    {
+        float rawI = _readLinear(PMBUS_READ_IOUT);
+        I_out = applyICalTable(rawI);
+    }
     esp_rom_delay_us(1000);
     W_out = _readLinear(PMBUS_READ_POUT);
     esp_rom_delay_us(1000);
@@ -447,4 +465,128 @@ uint16_t PMBus::_convertHex2Dec(uint16_t hexData)
          + ((hexData % 1000) / 100) * 256
          + ((hexData % 100) / 10) * 16
          + (hexData % 10);
+}
+
+// ==================== 电流校准 (6 点查表) ====================
+
+void PMBus::setCurrentCalTable(const i_calib_point_t* points)
+{
+    for (int i = 0; i < I_CALIB_POINTS; i++) {
+        _iCalTable[i] = points[i];
+    }
+    ESP_LOGI(TAG, "Current calibration table set (%d points)", I_CALIB_POINTS);
+    for (int i = 0; i < I_CALIB_POINTS; i++) {
+        ESP_LOGI(TAG, "  [%d] target=%.1fA PWM=%.1f raw=%.3fA",
+                 i, _iCalTable[i].target, _iCalTable[i].pwm_val, _iCalTable[i].raw_val);
+    }
+    saveICalTableToNVS();
+}
+
+esp_err_t PMBus::loadICalTableFromNVS()
+{
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
+    if (err != ESP_OK) {
+        if (err != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(TAG, "NVS open failed: %d", err);
+        }
+        // 清空校准表
+        memset(_iCalTable, 0, sizeof(_iCalTable));
+        return err;
+    }
+
+    size_t sz = sizeof(_iCalTable);
+    err = nvs_get_blob(handle, NVS_KEY_I_CAL_TABLE, _iCalTable, &sz);
+    nvs_close(handle);
+
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Loaded current calibration table from NVS (%d points)", I_CALIB_POINTS);
+        for (int i = 0; i < I_CALIB_POINTS; i++) {
+            ESP_LOGI(TAG, "  [%d] target=%.1fA PWM=%.1f raw=%.3fA",
+                     i, _iCalTable[i].target, _iCalTable[i].pwm_val, _iCalTable[i].raw_val);
+        }
+        return ESP_OK;
+    }
+
+    ESP_LOGD(TAG, "No current calibration table found in NVS");
+    memset(_iCalTable, 0, sizeof(_iCalTable));
+    return err;
+}
+
+esp_err_t PMBus::saveICalTableToNVS()
+{
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "NVS open for write failed: %d", err);
+        return err;
+    }
+
+    err = nvs_set_blob(handle, NVS_KEY_I_CAL_TABLE, _iCalTable, sizeof(_iCalTable));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "NVS set i_cal_tbl failed: %d", err);
+        nvs_close(handle);
+        return err;
+    }
+
+    err = nvs_commit(handle);
+    nvs_close(handle);
+
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Current calibration table saved to NVS (%d bytes)", (int)sizeof(_iCalTable));
+    } else {
+        ESP_LOGE(TAG, "NVS commit failed: %s", esp_err_to_name(err));
+    }
+    return err;
+}
+
+/**
+ * 应用 6 点电流校准表进行分段线性插值
+ *
+ * 算法: 与电压校准完全一致的分段线性插值 (查表法)
+ *   - 在表内: 找到 rawI 所在区间 [raw_i, raw_{i+1}], 线性插值
+ *   - 低于最小值: 使用第一个区间斜率外推
+ *   - 高于最大值: 使用最后一个区间斜率外推
+ *   - 表为空 (所有 raw_val 为 0): 返回原始值
+ */
+float PMBus::applyICalTable(float rawI)
+{
+    // 检查表是否有效 (第一个点 raw_val 不为 0 表示有数据)
+    if (_iCalTable[0].raw_val < 0.001f && _iCalTable[I_CALIB_POINTS - 1].raw_val < 0.001f) {
+        // 表为空, 返回原始值
+        return rawI;
+    }
+
+    // 低于最小值: 使用第一个区间斜率外推
+    if (rawI <= _iCalTable[0].raw_val) {
+        if (_iCalTable[1].raw_val > _iCalTable[0].raw_val + 0.0001f) {
+            float slope = (_iCalTable[1].target - _iCalTable[0].target) /
+                          (_iCalTable[1].raw_val - _iCalTable[0].raw_val);
+            return _iCalTable[0].target + slope * (rawI - _iCalTable[0].raw_val);
+        }
+        return _iCalTable[0].target;
+    }
+
+    // 高于最大值: 使用最后一个区间斜率外推
+    if (rawI >= _iCalTable[I_CALIB_POINTS - 1].raw_val) {
+        int last = I_CALIB_POINTS - 1;
+        if (_iCalTable[last].raw_val > _iCalTable[last - 1].raw_val + 0.0001f) {
+            float slope = (_iCalTable[last].target - _iCalTable[last - 1].target) /
+                          (_iCalTable[last].raw_val - _iCalTable[last - 1].raw_val);
+            return _iCalTable[last].target + slope * (rawI - _iCalTable[last].raw_val);
+        }
+        return _iCalTable[last].target;
+    }
+
+    // 在表内: 找到所在区间进行线性插值
+    for (int i = 0; i < I_CALIB_POINTS - 1; i++) {
+        if (rawI >= _iCalTable[i].raw_val && rawI <= _iCalTable[i + 1].raw_val) {
+            float t = (rawI - _iCalTable[i].raw_val) /
+                      (_iCalTable[i + 1].raw_val - _iCalTable[i].raw_val);
+            return _iCalTable[i].target + t * (_iCalTable[i + 1].target - _iCalTable[i].target);
+        }
+    }
+
+    // 保底: 返回原始值
+    return rawI;
 }

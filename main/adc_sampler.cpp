@@ -156,6 +156,11 @@ float ADCSampler::sample()
     // 校准: V_cal = V_raw * mult + offset
     _calibratedVoltage = _filteredVoltage * _calMultiplier + _calOffset;
 
+    // 死区阈值: < 0.05V 时强制归零, 消除 ADC 底噪
+    if (_calibratedVoltage < 0.05f) {
+        _calibratedVoltage = 0.0f;
+    }
+
     return _calibratedVoltage;
 }
 

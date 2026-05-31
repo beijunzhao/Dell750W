@@ -1186,12 +1186,21 @@ class BleService {
    * @param {number} multiplier 乘数修正 (默认 1.0)
    * @param {number} offset 偏置修正 (默认 0.0V)
    */
-  calibrate(multiplier, offset) {
-    return this.send({
-      cmd: 'calibrate',
-      V_mult: parseFloat(multiplier.toFixed(4)),
-      V_offset: parseFloat(offset.toFixed(4))
-    })
+  /**
+   * 发送电压校准参数到设备
+   * @param {Object} params - 校准参数
+   * @param {number} [params.V_mult] - 电压乘数修正
+   * @param {number} [params.V_offset] - 电压偏置修正
+   */
+  calibrate(params = {}) {
+    const payload = { cmd: 'calibrate' }
+    if (params.V_mult !== undefined) {
+      payload.V_mult = parseFloat(params.V_mult.toFixed(4))
+    }
+    if (params.V_offset !== undefined) {
+      payload.V_offset = parseFloat(params.V_offset.toFixed(4))
+    }
+    return this.send(payload)
   }
 
   /**
@@ -1213,6 +1222,38 @@ class BleService {
    */
   calConfirm() {
     return this.send({ cmd: 'cal_confirm' })
+  }
+
+  /**
+   * 设置电流校准表 (6 点分段线性插值)
+   * @param {Array} points - 6 个校准点数组, 每个点格式: {r: raw_val, v: target, p: pwm_val}
+   *   r: PMBus 原始电流读数 (A)
+   *   v: 目标电流 (A)
+   *   p: PWM 值 (可选)
+   */
+  setICalTable(points) {
+    const payload = {
+      cmd: 'set_i_cal_table',
+      points: points.map(p => ({
+        r: parseFloat(p.r.toFixed(3)),
+        v: parseFloat(p.v.toFixed(1)),
+        p: p.p !== undefined ? parseFloat(p.p.toFixed(1)) : 0.0
+      }))
+    }
+    return this.send(payload)
+  }
+
+  /**
+   * 设置全局量程 (通用化校准前置步骤)
+   * @param {number} vMax - 最大输出电压 (V)
+   * @param {number} iMax - 最大输出电流 (A)
+   */
+  setRange(vMax, iMax) {
+    return this.send({
+      cmd: 'set_range',
+      v_max: parseFloat(vMax.toFixed(1)),
+      i_max: parseFloat(iMax.toFixed(1))
+    })
   }
 
   /**

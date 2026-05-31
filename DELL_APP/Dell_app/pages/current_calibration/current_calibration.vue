@@ -3,18 +3,18 @@
 
 		<!-- 标题栏 -->
 		<view class="title-bar">
-			<text class="title-text">电压参数校准 (Step {{ calStep }}/6)</text>
+			<text class="title-text">电流参数校准 (Step {{ calStep }}/6)</text>
 		</view>
 
 		<!-- 数据面板 -->
 		<view class="data-panel">
 			<view class="data-row">
 				<text class="data-label">校准目标</text>
-				<text class="data-value target-color">{{ calTarget.toFixed(2) }} V</text>
+				<text class="data-value target-color">{{ calTarget.toFixed(1) }} A</text>
 			</view>
 			<view class="data-row">
-				<text class="data-label">实时 ADC</text>
-				<text class="data-value adc-color">{{ calAdc }}</text>
+				<text class="data-label">实时电流</text>
+				<text class="data-value current-color">{{ calCurrent.toFixed(3) }} A</text>
 			</view>
 			<view class="data-row">
 				<text class="data-label">当前 PWM</text>
@@ -22,10 +22,16 @@
 			</view>
 		</view>
 
+		<!-- 安全提示 (降压保护) -->
+		<view class="safety-hint">
+			<text class="safety-icon">⚠️</text>
+			<text class="safety-text">为控制测试功率，系统已自动将输出电压降至 2.0V。请确保已先完成电压校准。</text>
+		</view>
+
 		<!-- 操作提示 -->
 		<view class="hint-box">
 			<text class="hint-icon">💡</text>
-			<text class="hint-text">用万用表测量输出端电压，按 UP/DOWN 调节 PWM 使电压等于目标值，然后按 OK 确认</text>
+			<text class="hint-text">用万用表测量输出端电流，按 UP/DOWN 调节 PWM 使电流等于目标值，然后按 OK 确认</text>
 		</view>
 
 		<!-- 步骤进度指示器 -->
@@ -37,8 +43,8 @@
 				</view>
 			</view>
 			<view class="progress-targets">
-				<text v-for="(t, i) in targetVoltages" :key="i" class="target-label" :class="{ active: (i + 1) === calStep }">
-					{{ t.toFixed(1) }}V
+				<text v-for="(t, i) in targetCurrents" :key="i" class="target-label" :class="{ active: (i + 1) === calStep }">
+					{{ t.toFixed(0) }}A
 				</text>
 			</view>
 		</view>
@@ -52,13 +58,13 @@
 				<view class="result-header">
 					<text class="result-th">Step</text>
 					<text class="result-th">目标</text>
-					<text class="result-th">ADC</text>
+					<text class="result-th">原始电流</text>
 					<text class="result-th">PWM</text>
 				</view>
 				<view v-for="(r, i) in calResults" :key="i" class="result-row">
 					<text class="result-td">{{ i + 1 }}</text>
-					<text class="result-td">{{ r.target.toFixed(1) }}V</text>
-					<text class="result-td">{{ r.adc }}</text>
+					<text class="result-td">{{ r.target.toFixed(1) }}A</text>
+					<text class="result-td">{{ r.raw.toFixed(3) }}A</text>
 					<text class="result-td">{{ r.pwm }}</text>
 				</view>
 			</view>
@@ -109,23 +115,23 @@
 		<view class="modal-overlay" v-if="showRangeDialog" @tap="showRangeDialog = false">
 			<view class="modal-box" @tap.stop>
 				<view class="modal-header">
-					<text class="modal-title">电压量程设置</text>
-					<text class="modal-subtitle">请设置当前电源的最大输出电压，系统将自动生成 6 个校准点</text>
+					<text class="modal-title">电流量程设置</text>
+					<text class="modal-subtitle">请设置当前电源的最大输出电流，系统将自动生成 6 个校准点</text>
 				</view>
 				<view class="modal-body">
 					<view class="input-group">
-						<text class="input-label">最大输出电压 (V_MAX)</text>
+						<text class="input-label">最大输出电流 (I_MAX)</text>
 						<view class="input-wrap">
-							<input class="input-field" type="digit" v-model="rangeVMax" placeholder="例如 15.0" />
-							<text class="input-unit">V</text>
+							<input class="input-field" type="digit" v-model="rangeIMax" placeholder="例如 65.0" />
+							<text class="input-unit">A</text>
 						</view>
 					</view>
 					<!-- 预览生成的校准点 -->
 					<view class="preview-section" v-if="previewPoints.length > 0">
-						<text class="preview-label">即将校准的 6 个电压点:</text>
+						<text class="preview-label">即将校准的 6 个电流点:</text>
 						<view class="preview-list">
 							<text v-for="(p, i) in previewPoints" :key="i" class="preview-item">
-								{{ (i + 1) }}. {{ p.toFixed(2) }}V
+								{{ (i + 1) }}. {{ p.toFixed(1) }}A
 							</text>
 						</view>
 					</view>
@@ -147,9 +153,9 @@
 				<text class="nav-icon">📊</text>
 				<text class="nav-label">监控</text>
 			</view>
-			<view class="nav-item active" @tap="switchTab('calibration')">
+			<view class="nav-item active" @tap="switchTab('current_calibration')">
 				<text class="nav-icon">🔧</text>
-				<text class="nav-label">校准</text>
+				<text class="nav-label">电流校准</text>
 			</view>
 			<view class="nav-ble" :class="{ connected: connected }" @tap="disconnect">
 				<view class="nav-ble-dot" :class="{ active: connected }"></view>
@@ -186,30 +192,34 @@
 				connected: false,
 				// 量程设置
 				showRangeDialog: false,
-				rangeVMax: '',
+				rangeIMax: '',
 				// 动态生成的校准点
-				targetVoltages: [0.0, 1.0, 2.5, 5.0, 10.0, 12.0],
+				targetCurrents: [0.0, 5.0, 15.0, 30.0, 45.0, 60.0],
 				calMode: false,
 				calStep: 1,
 				calTarget: 0.0,
-				calAdc: 0,
+				calCurrent: 0,
 				calPwm: 0,
 				calResults: [],
 				_pwmTimer: null,
-				_pwmDir: 0
+				_pwmDir: 0,
+				/** 进入页面前的电压值，用于退出时恢复 */
+				_prevVSet: 0,
+				/** 安全降压目标 */
+				SAFE_VOLTAGE: 2.0
 			}
 		},
 		computed: {
 			/** 量程输入是否有效 */
 			rangeValid() {
-				const v = parseFloat(this.rangeVMax)
-				return v > 0
+				const i = parseFloat(this.rangeIMax)
+				return i > 0
 			},
-			/** 预览即将生成的 6 个电压校准点 */
+			/** 预览即将生成的 6 个电流校准点 */
 			previewPoints() {
-				const v = parseFloat(this.rangeVMax)
-				if (!(v > 0)) return []
-				return generateCalPoints(v)
+				const i = parseFloat(this.rangeIMax)
+				if (!(i > 0)) return []
+				return generateCalPoints(i)
 			}
 		},
 		onLoad() {
@@ -220,6 +230,20 @@
 		},
 		onShow() {
 			this.connected = bleService.connected
+
+			// ===== 安全保护: 进入电流校准页面时自动降压至 2.0V =====
+			if (this.connected) {
+				// 保存当前电压值用于退出时恢复
+				const lastData = bleService.getLastData()
+				if (lastData && lastData.V_set !== undefined) {
+					this._prevVSet = lastData.V_set
+				}
+				// 发送降压指令 (fire-and-forget, 不阻塞 UI)
+				bleService.setVoltage(this.SAFE_VOLTAGE).catch(err => {
+					console.error('[ICal] 自动降压失败:', err)
+				})
+			}
+
 			// 注册数据回调，实时更新校准数据
 			bleService.onData((data) => {
 				if (data.cal_mode !== undefined) {
@@ -227,18 +251,18 @@
 				}
 				if (data.cal_step !== undefined) {
 					this.calStep = data.cal_step
-					this.calTarget = this.targetVoltages[this.calStep - 1] || 0
+					this.calTarget = this.targetCurrents[this.calStep - 1] || 0
 				}
 				if (data.cal_target !== undefined) {
 					this.calTarget = data.cal_target
 				}
-				if (data.cal_adc !== undefined) this.calAdc = data.cal_adc
+				if (data.I_out !== undefined) this.calCurrent = data.I_out
 				if (data.cal_pwm !== undefined) this.calPwm = data.cal_pwm
 				// 校准结果记录 (ESP32 推送的 cal_result_* 数据)
 				if (data.cal_result_target !== undefined) {
 					this.calResults.push({
 						target: data.cal_result_target,
-						adc: data.cal_result_adc || 0,
+						raw: data.cal_result_adc || 0,
 						pwm: data.cal_result_pwm || 0
 					})
 				}
@@ -249,16 +273,22 @@
 				if (data.cal_mode !== undefined) this.calMode = data.cal_mode === 1 || data.cal_mode === true
 				if (data.cal_step !== undefined) {
 					this.calStep = data.cal_step
-					this.calTarget = this.targetVoltages[this.calStep - 1] || 0
+					this.calTarget = this.targetCurrents[this.calStep - 1] || 0
 				}
 				if (data.cal_target !== undefined) this.calTarget = data.cal_target
-				if (data.cal_adc !== undefined) this.calAdc = data.cal_adc
+				if (data.I_out !== undefined) this.calCurrent = data.I_out
 				if (data.cal_pwm !== undefined) this.calPwm = data.cal_pwm
 			}
 		},
-		// 离开页面时停止 PWM 定时器
+		// 离开页面时: 停止 PWM 定时器 + 关闭输出防止意外
 		onUnload() {
 			this._stopPwmTimer()
+			// 退出时关闭输出 (安全保护)
+			if (this.connected) {
+				bleService.send({ cmd: 'set', power: 0 }).catch(err => {
+					console.error('[ICal] 退出关闭输出失败:', err)
+				})
+			}
 		},
 		methods: {
 			/**
@@ -266,23 +296,23 @@
 			 */
 			async confirmRange() {
 				if (!this.connected) return
-				const vMax = parseFloat(this.rangeVMax)
-				if (!(vMax > 0)) {
-					uni.showToast({ title: '请输入有效的最大电压', icon: 'none' })
+				const iMax = parseFloat(this.rangeIMax)
+				if (!(iMax > 0)) {
+					uni.showToast({ title: '请输入有效的最大电流', icon: 'none' })
 					return
 				}
 				uni.showLoading({ title: '设置量程...' })
 				try {
-					// 1. 下发电压量程到设备
-					await bleService.setRange(vMax, 0)
-					// 2. 动态生成 6 个校准点
-					this.targetVoltages = generateCalPoints(vMax)
+					// 1. 下发电流量程到设备
+					await bleService.setRange(0, iMax)
+					// 2. 动态生成 6 个电流校准点
+					this.targetCurrents = generateCalPoints(iMax)
 					// 3. 关闭弹窗，进入校准模式
 					this.showRangeDialog = false
 					await bleService.enterCalMode()
 					this.calMode = true
 					this.calStep = 1
-					this.calTarget = this.targetVoltages[0]
+					this.calTarget = this.targetCurrents[0]
 					this.calResults = []
 					uni.hideLoading()
 					uni.showToast({ title: '已进入校准模式', icon: 'success' })
@@ -352,6 +382,27 @@
 					uni.showToast({ title: '确认失败', icon: 'error' })
 				}
 			},
+			/**
+			 * 所有 6 点完成后提交电流校准表到设备
+			 */
+			async submitCalTable() {
+				if (!this.connected || this.calResults.length < 6) return
+				uni.showLoading({ title: '保存校准表...' })
+				try {
+					// 构建 6 点校准表数据
+					const points = this.calResults.map((r, i) => ({
+						r: r.raw,       // PMBus 原始电流
+						v: r.target,    // 目标电流
+						p: r.pwm        // PWM 值
+					}))
+					await bleService.setICalTable(points)
+					uni.hideLoading()
+					uni.showToast({ title: '电流校准表已保存', icon: 'success' })
+				} catch (err) {
+					uni.hideLoading()
+					uni.showToast({ title: '保存失败: ' + (err.message || ''), icon: 'none' })
+				}
+			},
 			disconnect() {
 				bleService.disconnect()
 				this.connected = false
@@ -360,9 +411,23 @@
 				const urls = {
 					index: '/pages/index/index',
 					control: '/pages/control/control',
-					calibration: '/pages/calibration/calibration'
+					current_calibration: '/pages/current_calibration/current_calibration'
 				}
 				uni.reLaunch({ url: urls[tab] })
+			}
+		},
+		// 监听 calResults 变化: 当 6 点全部完成时自动提交
+		watch: {
+			calResults: {
+				handler(newVal) {
+					if (newVal.length >= 6 && this.calMode && this.calStep > 6) {
+						// 延迟一下等待 ESP32 完成状态切换
+						setTimeout(() => {
+							this.submitCalTable()
+						}, 500)
+					}
+				},
+				deep: true
 			}
 		}
 	}
@@ -382,7 +447,7 @@
 
 	/* 标题栏 */
 	.title-bar {
-		background: linear-gradient(135deg, #ff6f00, #ff8f00);
+		background: linear-gradient(135deg, #00695c, #00897b);
 		margin: 0 -30rpx;
 		padding: 28rpx 30rpx;
 	}
@@ -429,12 +494,36 @@
 		color: #ffd54f;
 	}
 
-	.adc-color {
-		color: #4fc3f7;
+	.current-color {
+		color: #66bb6a;
 	}
 
 	.pwm-color {
-		color: #66bb6a;
+		color: #4fc3f7;
+	}
+
+	/* 安全提示 (降压保护) */
+	.safety-hint {
+		background: #2a1f00;
+		border-radius: 16rpx;
+		padding: 20rpx 24rpx;
+		margin-top: 24rpx;
+		border-left: 6rpx solid #ff8f00;
+		display: flex;
+		align-items: flex-start;
+	}
+
+	.safety-icon {
+		font-size: 32rpx;
+		margin-right: 14rpx;
+		flex-shrink: 0;
+	}
+
+	.safety-text {
+		font-size: 24rpx;
+		color: #ffb74d;
+		line-height: 1.6;
+		flex: 1;
 	}
 
 	/* 提示框 */
@@ -498,8 +587,8 @@
 	}
 
 	.progress-dot.current {
-		background: #ff8f00;
-		border-color: #ffb74d;
+		background: #00897b;
+		border-color: #4db6ac;
 		transform: scale(1.2);
 	}
 
@@ -528,7 +617,7 @@
 	}
 
 	.target-label.active {
-		color: #ffb74d;
+		color: #4db6ac;
 		font-weight: 600;
 	}
 
@@ -603,7 +692,7 @@
 	}
 
 	.enter-btn {
-		background: linear-gradient(135deg, #ff8f00, #e65100);
+		background: linear-gradient(135deg, #00897b, #004d40);
 	}
 
 	.exit-btn {
@@ -717,7 +806,7 @@
 	}
 
 	.nav-item.active .nav-label {
-		color: #ff8f00;
+		color: #00897b;
 	}
 
 	.nav-icon {

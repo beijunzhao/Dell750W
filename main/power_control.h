@@ -35,22 +35,22 @@ public:
 
     /**
      * 设定目标输出电压
-     * @param voltage 目标电压 (0.0 ~ 12.0V)
+     * @param voltage 目标电压 (0.0 ~ _vMax)
      * @return ESP_OK 或 ESP_ERR_INVALID_ARG
      *
      * 内部公式(正向逻辑):
-     *   V_DAC = (voltage / 12.0) * 3.0
+     *   V_DAC = (voltage / _vMax) * 3.0
      *   PWM_duty = (V_DAC / 3.3) * PWM_MAX_DUTY
      */
     static esp_err_t setVoltage(float voltage);
 
     /**
      * 设定目标输出电流
-     * @param current 目标电流 (0.0 ~ 62.5A)
+     * @param current 目标电流 (0.0 ~ _iMax)
      * @return ESP_OK 或 ESP_ERR_INVALID_ARG
      *
      * 内部公式(正向逻辑):
-     *   I_DAC = (current / 62.5) * 3.0
+     *   I_DAC = (current / _iMax) * 3.0
      *   PWM_duty = (I_DAC / 3.3) * PWM_MAX_DUTY
      */
     static esp_err_t setCurrent(float current);
@@ -60,6 +60,24 @@ public:
 
     /** 获取当前设定的电流值 */
     static float getSetCurrent() { return _currentSet; }
+
+    /** 获取当前量程上限 (V_MAX) */
+    static float getVMax() { return _vMax; }
+
+    /** 获取当前量程上限 (I_MAX) */
+    static float getIMax() { return _iMax; }
+
+    /**
+     * 设置电压量程上限
+     * @param vMax 新的电压上限 (不超过 PSU_VOLTAGE_MAX)
+     */
+    static void setVMax(float vMax);
+
+    /**
+     * 设置电流量程上限
+     * @param iMax 新的电流上限 (不超过 PSU_CURRENT_MAX)
+     */
+    static void setIMax(float iMax);
 
     /**
      * @brief 直接设置 PWM 占空比 (校准模块使用)
@@ -72,6 +90,8 @@ private:
     static float _voltageSet;
     static float _currentSet;
     static bool  _powerState;
+    static float _vMax;   // 当前电压量程上限 (默认 PSU_VOLTAGE_MAX_DEF)
+    static float _iMax;   // 当前电流量程上限 (默认 PSU_CURRENT_MAX_DEF)
 
     /** 将指定 GPIO 初始化为推挽输出并设为 LOW */
     static esp_err_t _gpioInitLow(gpio_num_t gpio);

@@ -80,6 +80,43 @@ public:
     /** 检查电源是否在运行 (V_out > 1V) */
     static bool isRunning();
 
+    /**
+     * @brief 电流校准点结构体
+     */
+    typedef struct {
+        float target;   /**< 目标电流 (A) */
+        float pwm_val;  /**< 确认时的 PWM 值 */
+        float raw_val;  /**< 确认时的 PMBus 原始电流 (A) */
+    } i_calib_point_t;
+
+    /** 电流校准点数 */
+    static const int I_CALIB_POINTS = 6;
+
+    /** 目标电流数组 */
+    static const float I_CALIB_TARGETS[I_CALIB_POINTS];
+
+    /**
+     * @brief 设置电流校准表 (自动写入 NVS 持久化)
+     * @param points 6 个校准点数据
+     */
+    static void setCurrentCalTable(const i_calib_point_t* points);
+
+    /** 获取电流校准表指针 */
+    static const i_calib_point_t* getCurrentCalTable() { return _iCalTable; }
+
+    /** 从 NVS 加载电流校准表 (init 时自动调用) */
+    static esp_err_t loadICalTableFromNVS();
+
+    /** 保存电流校准表到 NVS */
+    static esp_err_t saveICalTableToNVS();
+
+    /**
+     * @brief 应用电流校准表进行插值
+     * @param rawI PMBus 原始电流值
+     * @return 校准后的电流值
+     */
+    static float applyICalTable(float rawI);
+
     // ---------- 公开的遥测数据 ----------
     static float V_in, I_in, V_out, I_out, W_in, W_out, E_in, E_out;
     static float temperature[3], fanSpeed[2];
@@ -105,6 +142,8 @@ private:
     static void  _readCoefficients(uint16_t* m, uint16_t* b, int8_t* R);
     static void  _readMFR();
     static uint16_t _convertHex2Dec(uint16_t hexData);
+    /** 电流校准表 (6 点) */
+    static i_calib_point_t _iCalTable[I_CALIB_POINTS];
 };
 
 #endif // PMBUS_H

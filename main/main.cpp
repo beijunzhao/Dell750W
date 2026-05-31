@@ -389,6 +389,8 @@ static void on_ble_rx(const char* data, int len)
     //   {"cmd":"cal_mode","enter":1}       → 进入/退出校准模式
     //   {"cmd":"cal_pwm_adjust","dir":1}   → PWM 微调 (1=增加, -1=减少)
     //   {"cmd":"cal_confirm"}              → 确认当前校准点
+    //   {"cmd":"set_i_cal_table","points":[{"r":0.0,"v":0.0},...]}  → 设置电流校准表
+    //   {"cmd":"set_range","v_max":15.0,"i_max":65.0}  → 设置量程上限
 
     char cmd[32] = {};
     float val = 0.0f;
@@ -440,9 +442,11 @@ static void on_ble_rx(const char* data, int len)
             if (vp) {
                 vp = strstr(vp, ":") + 1;
                 val = strtof(vp, nullptr);
-                if (val >= 0 && val <= PSU_VOLTAGE_MAX) {
+                if (val >= 0 && val <= PowerControl::getVMax()) {
                     PowerControl::setVoltage(val);
                     ESP_LOGI(TAG, "Voltage set to %.3fV", val);
+                } else {
+                    ESP_LOGW(TAG, "V_set %.3f out of range (0~%.1f)", val, PowerControl::getVMax());
                 }
             }
         }
@@ -452,9 +456,11 @@ static void on_ble_rx(const char* data, int len)
             if (ip) {
                 ip = strstr(ip, ":") + 1;
                 val = strtof(ip, nullptr);
-                if (val >= 0 && val <= PSU_CURRENT_MAX) {
+                if (val >= 0 && val <= PowerControl::getIMax()) {
                     PowerControl::setCurrent(val);
                     ESP_LOGI(TAG, "Current set to %.3fA", val);
+                } else {
+                    ESP_LOGW(TAG, "I_set %.3f out of range (0~%.1f)", val, PowerControl::getIMax());
                 }
             }
         }
@@ -490,27 +496,28 @@ static void on_ble_rx(const char* data, int len)
     }
     else if (strcmp(cmd, "calibrate") == 0) {
         // 校准命令: {"cmd":"calibrate","V_mult":1.005,"V_offset":-0.05}
-        // 允许只传一个参数, 另一个保持不变
-        float newMult = ADCSampler::getCalMultiplier();
-        float newOff  = ADCSampler::getCalOffset();
+        // 仅用于电压校准, 允许只传部分参数, 其余保持不变
+        float newVMult = ADCSampler::getCalMultiplier();
+        float newVOff  = ADCSampler::getCalOffset();
 
         const char* mp = strstr(line, "\"V_mult\":");
         if (mp) {
             mp = strstr(mp, ":") + 1;
-            newMult = strtof(mp, nullptr);
+            newVMult = strtof(mp, nullptr);
         }
         const char* op = strstr(line, "\"V_offset\":");
         if (op) {
             op = strstr(op, ":") + 1;
-            newOff = strtof(op, nullptr);
+            newVOff = strtof(op, nullptr);
         }
 
-        ADCSampler::calibrate(newMult, newOff);
-        ESP_LOGI(TAG, "Calibration set: mult=%.4f offset=%.4f", newMult, newOff);
+        ADCSampler::calibrate(newVMult, newVOff);
+        ESP_LOGI(TAG, "Calibration set: V_mult=%.4f V_offset=%.4f",
+                 newVMult, newVOff);
 
         snprintf(g_respBuf, sizeof(g_respBuf),
             "{\"ack\":\"cal_ok\",\"V_mult\":%.4f,\"V_offset\":%.4f}",
-            newMult, newOff);
+            newVMult, newVOff);
         send_response(g_respBuf);
     }
     else if (strcmp(cmd, "cal_mode") == 0) {
@@ -565,6 +572,86 @@ static void on_ble_rx(const char* data, int len)
             send_response("{\"ack\":\"cal_confirmed\"}");
         }
     }
+    else if (strcmp(cmd, "set_i_cal_table") == 0) {
+        // 设置电流校准表: {"cmd":"set_i_cal_table","points":[{"r":0.0,"v":0.0},...]}
+        PMBus::i_calib_point_t points[PMBus::I_CALIB_POINTS];
+        // 初始化为目标值, raw_val 和 pwm_val 为 0
+        for (int i = 0; i < PMBus::I_CALIB_POINTS; i++) {
+            points[i].target  = PMBus::I_CALIB_TARGETS[i];
+            points[i].pwm_val = 0.0f;
+            points[i].raw_val = 0.0f;
+        }
+
+        // 解析 points 数组
+        const char* pts = strstr(line, "\"points\"");
+        if (pts) {
+            pts = strstr(pts, "[");
+            if (pts) {
+                pts++; // 跳过 '['
+                for (int i = 0; i < PMBus::I_CALIB_POINTS; i++) {
+                    // 查找 "r": 字段 (raw_val)
+                    const char* rp = strstr(pts, "\"r\":");
+                    if (rp) {
+                        rp = strstr(rp, ":") + 1;
+                        points[i].raw_val = strtof(rp, nullptr);
+                    }
+                    // 查找 "v": 字段 (target/pwm_val - 这里 v 表示 target)
+                    const char* vp = strstr(pts, "\"v\":");
+                    if (vp) {
+                        vp = strstr(vp, ":") + 1;
+                        points[i].target = strtof(vp, nullptr);
+                    }
+                    // 查找 "p": 字段 (pwm_val, 可选)
+                    const char* pp = strstr(pts, "\"p\":");
+                    if (pp) {
+                        pp = strstr(pp, ":") + 1;
+                        points[i].pwm_val = strtof(pp, nullptr);
+                    }
+                    // 跳到下一个 point
+                    pts = strstr(pts, "}");
+                    if (pts) pts++;
+                }
+            }
+        }
+
+        PMBus::setCurrentCalTable(points);
+        ESP_LOGI(TAG, "Current calibration table set via BLE");
+
+        // 构建响应 JSON
+        char resp[512];
+        int pos = snprintf(resp, sizeof(resp),
+            "{\"ack\":\"i_cal_table_ok\",\"i_cal_points\":[");
+        for (int i = 0; i < PMBus::I_CALIB_POINTS; i++) {
+            pos += snprintf(resp + pos, sizeof(resp) - pos,
+                "%s{\"r\":%.3f,\"v\":%.1f,\"p\":%.1f}",
+                (i > 0 ? "," : ""),
+                points[i].raw_val, points[i].target, points[i].pwm_val);
+        }
+        snprintf(resp + pos, sizeof(resp) - pos, "]}");
+        send_response(resp);
+    }
+    else if (strcmp(cmd, "set_range") == 0) {
+        // 设置量程: {"cmd":"set_range","v_max":15.0,"i_max":65.0}
+        // 可以只传其中一个, 另一个保持不变
+        const char* vp = strstr(line, "\"v_max\":");
+        if (vp) {
+            vp = strstr(vp, ":") + 1;
+            float vMax = strtof(vp, nullptr);
+            PowerControl::setVMax(vMax);
+        }
+        const char* ip = strstr(line, "\"i_max\":");
+        if (ip) {
+            ip = strstr(ip, ":") + 1;
+            float iMax = strtof(ip, nullptr);
+            PowerControl::setIMax(iMax);
+        }
+        ESP_LOGI(TAG, "Range set: V_max=%.1f, I_max=%.1f",
+                 PowerControl::getVMax(), PowerControl::getIMax());
+        snprintf(g_respBuf, sizeof(g_respBuf),
+            "{\"ack\":\"range_ok\",\"V_max\":%.1f,\"I_max\":%.1f}",
+            PowerControl::getVMax(), PowerControl::getIMax());
+        send_response(g_respBuf);
+    }
     else {
         ESP_LOGW(TAG, "Unknown command: '%s'", cmd);
         send_response("{\"error\":\"unknown_command\"}");
@@ -598,6 +685,21 @@ static const char* build_full_data_json(void)
         calPwm = (int)ledc_get_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
     }
 
+    // 构建电流校准表 JSON 数组
+    char iCalPoints[512] = "";
+    {
+        const PMBus::i_calib_point_t* tbl = PMBus::getCurrentCalTable();
+        int pos = 0;
+        pos += snprintf(iCalPoints + pos, sizeof(iCalPoints) - pos, "[");
+        for (int i = 0; i < PMBus::I_CALIB_POINTS; i++) {
+            pos += snprintf(iCalPoints + pos, sizeof(iCalPoints) - pos,
+                "%s{\"r\":%.3f,\"v\":%.1f,\"p\":%.1f}",
+                (i > 0 ? "," : ""),
+                tbl[i].raw_val, tbl[i].target, tbl[i].pwm_val);
+        }
+        snprintf(iCalPoints + pos, sizeof(iCalPoints) - pos, "]");
+    }
+
     snprintf(g_respBuf, sizeof(g_respBuf),
         "{"
         "\"V_out\":%.3f,\"I_out\":%.3f,"
@@ -612,7 +714,9 @@ static const char* build_full_data_json(void)
         "\"V_mult\":%.4f,\"V_offset\":%.4f,"
         "\"V_raw\":%.3f,"
         "\"device_online\":%s,"
-        "\"cal_mode\":%d,\"cal_step\":%d,\"cal_target\":%.2f,\"cal_adc\":%d,\"cal_pwm\":%d"
+        "\"cal_mode\":%d,\"cal_step\":%d,\"cal_target\":%.2f,\"cal_adc\":%d,\"cal_pwm\":%d,"
+        "\"i_cal_points\":%s,"
+        "\"V_max\":%.1f,\"I_max\":%.1f"
         "}",
         ADCSampler::getVoltage(), PMBus::I_out,
         PMBus::V_in, PMBus::I_in,
@@ -626,7 +730,9 @@ static const char* build_full_data_json(void)
         ADCSampler::getCalMultiplier(), ADCSampler::getCalOffset(),
         ADCSampler::getRawVoltage(),
         PMBus::isDeviceOnline() ? "true" : "false",
-        calActive ? 1 : 0, calStep, calTarget, calAdc, calPwm
+        calActive ? 1 : 0, calStep, calTarget, calAdc, calPwm,
+        iCalPoints,
+        PowerControl::getVMax(), PowerControl::getIMax()
     );
     return g_respBuf;
 }

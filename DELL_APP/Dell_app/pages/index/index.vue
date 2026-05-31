@@ -222,6 +222,15 @@
 							<text class="modal-cal-arrow">›</text>
 						</view>
 					</view>
+					<!-- 电流设置弹窗中增加校准入口 -->
+					<view v-if="modalType === 'current'" class="modal-cal-section">
+						<view class="modal-cal-divider"></view>
+						<view class="modal-cal-btn" @tap="goCurrentCalibration">
+							<text class="modal-cal-icon">🔧</text>
+							<text class="modal-cal-text">电流校准 (6 点详细校准)</text>
+							<text class="modal-cal-arrow">›</text>
+						</view>
+					</view>
 				</view>
 				<view class="modal-footer">
 					<view class="modal-btn modal-btn-cancel" @tap="closeModal">取消</view>
@@ -360,6 +369,13 @@
 						title: `${type === 'voltage' ? '电压' : '电流'}已设置`,
 						icon: 'success'
 					})
+				}
+				// 同步设备端量程上限 (V_max / I_max)
+				if (data.V_max !== undefined && data.V_max > 0) {
+					this.voltageMax = data.V_max
+				}
+				if (data.I_max !== undefined && data.I_max > 0) {
+					this.currentMax = data.I_max
 				}
 			})
 
@@ -591,6 +607,17 @@
 					this.closeModal()
 					uni.navigateTo({
 						url: '/pages/calibration/calibration'
+					})
+				},
+				/**
+				 * 打开电流校准页面
+				 * 电流校准使用 6 点分段线性插值 (查表法)
+				 * 导航到独立的电流校准页面进行操作
+				 */
+				goCurrentCalibration() {
+					this.closeModal()
+					uni.navigateTo({
+						url: '/pages/current_calibration/current_calibration'
 					})
 				},
 

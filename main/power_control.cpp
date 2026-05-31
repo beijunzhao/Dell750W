@@ -12,6 +12,8 @@ static const char* TAG = "PowerCtrl";
 float PowerControl::_voltageSet = 0.0f;
 float PowerControl::_currentSet = 0.0f;
 bool  PowerControl::_powerState = false;
+float PowerControl::_vMax = PSU_VOLTAGE_MAX_DEF;  // 默认 12.0V
+float PowerControl::_iMax = PSU_CURRENT_MAX_DEF;  // 默认 62.5A
 
 esp_err_t PowerControl::init()
 {
@@ -87,15 +89,15 @@ bool PowerControl::isPoweredOn()
 
 esp_err_t PowerControl::setVoltage(float voltage)
 {
-    if (voltage < 0.0f || voltage > PSU_VOLTAGE_MAX) {
-        ESP_LOGW(TAG, "Voltage out of range: %.3f (valid: 0~%.1f)", voltage, PSU_VOLTAGE_MAX);
+    if (voltage < 0.0f || voltage > _vMax) {
+        ESP_LOGW(TAG, "Voltage out of range: %.3f (valid: 0~%.1f)", voltage, _vMax);
         return ESP_ERR_INVALID_ARG;
     }
 
     _voltageSet = voltage;
 
-    // 正向逻辑: V_DAC = (V_target / 12.0) * 3.0
-    float vDac = (voltage / PSU_VOLTAGE_MAX) * V_DAC_MAX;
+    // 正向逻辑: V_DAC = (V_target / V_MAX) * 3.0
+    float vDac = (voltage / _vMax) * V_DAC_MAX;
 
     // PWM 占空比 = (V_DAC / 3.3) * 2047
     uint32_t duty = (uint32_t)((vDac / MCU_VDD) * PWM_MAX_DUTY);
@@ -109,15 +111,15 @@ esp_err_t PowerControl::setVoltage(float voltage)
 
 esp_err_t PowerControl::setCurrent(float current)
 {
-    if (current < 0.0f || current > PSU_CURRENT_MAX) {
-        ESP_LOGW(TAG, "Current out of range: %.3f (valid: 0~%.1f)", current, PSU_CURRENT_MAX);
+    if (current < 0.0f || current > _iMax) {
+        ESP_LOGW(TAG, "Current out of range: %.3f (valid: 0~%.1f)", current, _iMax);
         return ESP_ERR_INVALID_ARG;
     }
 
     _currentSet = current;
 
-    // 正向逻辑: I_DAC = (I_target / 62.5) * 3.0
-    float iDac = (current / PSU_CURRENT_MAX) * V_DAC_MAX;
+    // 正向逻辑: I_DAC = (I_target / I_MAX) * 3.0
+    float iDac = (current / _iMax) * V_DAC_MAX;
 
     // PWM 占空比 = (I_DAC / 3.3) * 8191
     uint32_t duty = (uint32_t)((iDac / MCU_VDD) * PWM_MAX_DUTY);
@@ -126,6 +128,22 @@ esp_err_t PowerControl::setCurrent(float current)
 
     _pwmSetDuty(LEDC_CHANNEL_1, duty);
     return ESP_OK;
+}
+
+void PowerControl::setVMax(float vMax)
+{
+    if (vMax < 0.0f) vMax = 0.0f;
+    if (vMax > PSU_VOLTAGE_MAX) vMax = PSU_VOLTAGE_MAX;
+    _vMax = vMax;
+    ESP_LOGI(TAG, "V_MAX set to %.1fV", _vMax);
+}
+
+void PowerControl::setIMax(float iMax)
+{
+    if (iMax < 0.0f) iMax = 0.0f;
+    if (iMax > PSU_CURRENT_MAX) iMax = PSU_CURRENT_MAX;
+    _iMax = iMax;
+    ESP_LOGI(TAG, "I_MAX set to %.1fA", _iMax);
 }
 
 void PowerControl::setPwmDuty(ledc_channel_t channel, uint32_t duty)
