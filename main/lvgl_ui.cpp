@@ -54,8 +54,8 @@ typedef enum { FOCUS_POWER = 0, FOCUS_VSET, FOCUS_ISET } focus_t;
 static int s_focus = FOCUS_POWER;
 
 /* ========== Page 2 菜单 ========== */
-#define MENU_COUNT 4
-static int s_menu_idx = 0;  /* 0~3 */
+#define MENU_COUNT 5
+static int s_menu_idx = 0;  /* 0~4 */
 
 /* ========== 编辑模式 ========== */
 static uint32_t s_last_ok_ms = 0;
@@ -103,10 +103,13 @@ void lvgl_ui_init(void)
     lv_obj_set_style_text_font(s_menu_cursor, &lv_font_SourceHanSerifSC_Regular_24, (uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(s_menu_cursor, 255, (uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);
 
+    /* 不让 lv_screen_load 自动删除旧 screen */
+    guider_ui.screen_del = false;
+    guider_ui.screen_1_del = false;
+
     /* 默认显示主页 */
     s_page = PAGE_MAIN;
-    lv_obj_move_foreground(guider_ui.screen);
-    lv_obj_add_flag(guider_ui.screen_1, LV_OBJ_FLAG_HIDDEN);
+    lv_screen_load(guider_ui.screen);
 
     s_update_timer = lv_timer_create([](lv_timer_t *t) {
         (void)t; if (!s_ui_ready) return;
@@ -175,20 +178,19 @@ bool lvgl_ui_is_ready(void) { return s_ui_ready; }
 
 /* ========== 页面切换 ========== */
 
+/* main.cpp 中定义的全局去抖重置函数 */
+void lvgl_reset_debounce(void);
+
 static void _switch_to_page(page_t page)
 {
+    lvgl_reset_debounce();  /* 重置 main.cpp 中的去抖计时器 */
+
     if (page == PAGE_MAIN) {
-        /* 切回主页：隐藏菜单页，显示主页 */
-        lv_obj_move_foreground(guider_ui.screen);
-        lv_obj_add_flag(guider_ui.screen_1, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(guider_ui.screen, LV_OBJ_FLAG_HIDDEN);
+        lv_screen_load(guider_ui.screen);
         s_page = PAGE_MAIN;
         _apply_focus();
     } else {
-        /* 切到菜单页：隐藏主页，显示菜单页 */
-        lv_obj_move_foreground(guider_ui.screen_1);
-        lv_obj_add_flag(guider_ui.screen, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(guider_ui.screen_1, LV_OBJ_FLAG_HIDDEN);
+        lv_screen_load(guider_ui.screen_1);
         s_page = PAGE_MENU;
         s_menu_idx = 0;
         _apply_menu_cursor();
@@ -241,27 +243,18 @@ void lvgl_ui_handle_key(lvgl_key_t key)
         /* === 菜单页 === */
         switch (key) {
         case LVGL_KEY_UP:
-            s_menu_idx = (s_menu_idx + 1) % MENU_COUNT;
+            s_menu_idx = (s_menu_idx + MENU_COUNT - 1) % MENU_COUNT;  /* 上移 */
             _apply_menu_cursor();
             break;
         case LVGL_KEY_DOWN:
-            s_menu_idx = (s_menu_idx + MENU_COUNT - 1) % MENU_COUNT;
+            s_menu_idx = (s_menu_idx + 1) % MENU_COUNT;  /* 下移 */
             _apply_menu_cursor();
             break;
         case LVGL_KEY_OK:
-            switch (s_menu_idx) {
-            case 0: /* 电压校准 */
-                if (!calibration_is_active()) calibration_start();
-                break;
-            case 1: /* 电流校准 */
-                ESP_LOGI(TAG, "Current calibration (BLE only)");
-                break;
-            case 2: /* 电源输入 */
-                ESP_LOGI(TAG, "Power input info");
-                break;
-            case 3: /* 电源信息 */
-                ESP_LOGI(TAG, "Device info");
-                break;
+            if (s_menu_idx == 4) {
+                _switch_to_page(PAGE_MAIN);  /* 返回首页 */
+            } else {
+                ESP_LOGI(TAG, "Menu %d selected", s_menu_idx);
             }
             break;
         case LVGL_KEY_OK_LONG:
@@ -307,8 +300,8 @@ static void _clear_focus(void)
 
 /* ========== Page2 菜单光标 ========== */
 
-/* 4 个菜单项的 Y 坐标 (参考 setup_scr_screen_1.c) */
-static const int MENU_Y[] = { 28, 75, 121, 168 };
+/* 5 个菜单项的 Y 坐标 (参考 setup_scr_screen_1.c) */
+static const int MENU_Y[] = { 19, 60, 97, 137, 178 };
 
 static void _apply_menu_cursor(void)
 {

@@ -49,6 +49,11 @@ void lvgl_ui_handle_key(lvgl_key_t key);
  */
 void lvgl_color_test_init(void);
 
+/**
+ * @brief 重置去抖计时器（由 main.cpp 实现）
+ */
+void lvgl_reset_debounce(void);
+
 #ifdef __cplusplus
 }
 #endif

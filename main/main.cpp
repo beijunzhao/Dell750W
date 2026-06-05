@@ -749,14 +749,22 @@ void send_response(const char* json)
 
 // ==================== 按键处理 ====================
 
+/* 供 lvgl_ui.cpp 调用以重置去抖计时器 */
+uint64_t g_lastUpTime = 0;
+uint64_t g_lastDownTime = 0;
+
+void lvgl_reset_debounce(void) {
+    g_lastUpTime = 0;
+    g_lastDownTime = 0;
+}
+
 static void handle_buttons(void)
 {
-    static uint64_t lastUpTime = 0;
-    static uint64_t lastDownTime = 0;
     static uint64_t lastOkTime = 0;
     static uint64_t okPressStart = 0;
     static bool     okWasPressed = false;
     static bool     btnOkLast = false;
+    static bool     longPressJustFired = false;  /* 长按触发后阻止弹起误触 */
     uint64_t now = esp_timer_get_time() / 1000;
 
     bool btnUp   = (gpio_get_level(BTN_UP)   == 0);
@@ -792,19 +800,24 @@ static void handle_buttons(void)
 
     // ===== LVGL 正常模式 =====
 
-    // 长按 OK 检测 (按下时)
+    // 长按 OK 检测
     if (btnOk) {
-        if (!okWasPressed) { okWasPressed = true; okPressStart = now; }
-        if ((now - okPressStart) >= LONG_PRESS_MS) {
+        if (!okWasPressed && !longPressJustFired) {
+            okWasPressed = true; okPressStart = now;
+        }
+        if (okWasPressed && (now - okPressStart) >= LONG_PRESS_MS) {
             okWasPressed = false; okPressStart = 0;
-            calibration_start();
+            longPressJustFired = true;  /* 阻止弹起误触 */
+            lvgl_port_lock(0);
+            lvgl_ui_handle_key(LVGL_KEY_OK_LONG);
+            lvgl_port_unlock();
             return;
         }
-    }
-
-    // OK 弹起检测 (上升沿)
-    if (!btnOk && btnOkLast) {
-        if (okWasPressed) {
+    } else {
+        // OK 弹起检测
+        if (longPressJustFired) {
+            longPressJustFired = false;  /* 长按已释放，清标志 */
+        } else if (btnOkLast && okWasPressed) {
             okWasPressed = false;
             uint64_t dur = now - okPressStart;
             okPressStart = 0;
@@ -814,22 +827,26 @@ static void handle_buttons(void)
                 lvgl_port_unlock();
             }
         }
+        if (!btnOk) {
+            okWasPressed = false;
+            okPressStart = 0;
+        }
     }
     btnOkLast = btnOk;
 
-    // UP 键 (200ms 独立去抖)
-    if (btnUp && (now - lastUpTime) >= 200) {
-        lastUpTime = now;
+    // UP 键 (200ms 独立去抖) → 全局交换为 DOWN
+    if (btnUp && (now - g_lastUpTime) >= 200) {
+        g_lastUpTime = now;
         lvgl_port_lock(0);
-        lvgl_ui_handle_key(LVGL_KEY_UP);
+        lvgl_ui_handle_key(LVGL_KEY_DOWN);
         lvgl_port_unlock();
     }
 
-    // DOWN 键 (200ms 独立去抖)
-    if (btnDown && (now - lastDownTime) >= 200) {
-        lastDownTime = now;
+    // DOWN 键 (200ms 独立去抖) → 全局交换为 UP
+    if (btnDown && (now - g_lastDownTime) >= 200) {
+        g_lastDownTime = now;
         lvgl_port_lock(0);
-        lvgl_ui_handle_key(LVGL_KEY_DOWN);
+        lvgl_ui_handle_key(LVGL_KEY_UP);
         lvgl_port_unlock();
     }
 }

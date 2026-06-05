@@ -30,7 +30,7 @@ void setup_scr_screen_1(lv_ui *ui)
 
     //Write codes screen_1_label_1
     ui->screen_1_label_1 = lv_label_create(ui->screen_1);
-    lv_obj_set_pos(ui->screen_1_label_1, 59, 25);
+    lv_obj_set_pos(ui->screen_1_label_1, 59, 19);
     lv_obj_set_size(ui->screen_1_label_1, 141, 27);
     lv_label_set_text(ui->screen_1_label_1, "电压校准");
     lv_label_set_long_mode(ui->screen_1_label_1, LV_LABEL_LONG_WRAP);
@@ -53,7 +53,7 @@ void setup_scr_screen_1(lv_ui *ui)
 
     //Write codes screen_1_label_2
     ui->screen_1_label_2 = lv_label_create(ui->screen_1);
-    lv_obj_set_pos(ui->screen_1_label_2, 59, 72);
+    lv_obj_set_pos(ui->screen_1_label_2, 59, 60);
     lv_obj_set_size(ui->screen_1_label_2, 141, 27);
     lv_label_set_text(ui->screen_1_label_2, "电流校准");
     lv_label_set_long_mode(ui->screen_1_label_2, LV_LABEL_LONG_WRAP);
@@ -76,9 +76,9 @@ void setup_scr_screen_1(lv_ui *ui)
 
     //Write codes screen_1_label_3
     ui->screen_1_label_3 = lv_label_create(ui->screen_1);
-    lv_obj_set_pos(ui->screen_1_label_3, 59, 118);
+    lv_obj_set_pos(ui->screen_1_label_3, 59, 137);
     lv_obj_set_size(ui->screen_1_label_3, 141, 27);
-    lv_label_set_text(ui->screen_1_label_3, "电源输入");
+    lv_label_set_text(ui->screen_1_label_3, "电源信息");
     lv_label_set_long_mode(ui->screen_1_label_3, LV_LABEL_LONG_WRAP);
 
     //Write style for screen_1_label_3, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -99,9 +99,9 @@ void setup_scr_screen_1(lv_ui *ui)
 
     //Write codes screen_1_label_4
     ui->screen_1_label_4 = lv_label_create(ui->screen_1);
-    lv_obj_set_pos(ui->screen_1_label_4, 59, 165);
+    lv_obj_set_pos(ui->screen_1_label_4, 59, 178);
     lv_obj_set_size(ui->screen_1_label_4, 141, 27);
-    lv_label_set_text(ui->screen_1_label_4, "电源信息");
+    lv_label_set_text(ui->screen_1_label_4, "返回首页");
     lv_label_set_long_mode(ui->screen_1_label_4, LV_LABEL_LONG_WRAP);
 
     //Write style for screen_1_label_4, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -119,6 +119,29 @@ void setup_scr_screen_1(lv_ui *ui)
     lv_obj_set_style_pad_bottom(ui->screen_1_label_4, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_pad_left(ui->screen_1_label_4, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
     lv_obj_set_style_shadow_width(ui->screen_1_label_4, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+
+    //Write codes screen_1_label_5
+    ui->screen_1_label_5 = lv_label_create(ui->screen_1);
+    lv_obj_set_pos(ui->screen_1_label_5, 59, 97);
+    lv_obj_set_size(ui->screen_1_label_5, 141, 27);
+    lv_label_set_text(ui->screen_1_label_5, "电源信息");
+    lv_label_set_long_mode(ui->screen_1_label_5, LV_LABEL_LONG_WRAP);
+
+    //Write style for screen_1_label_5, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
+    lv_obj_set_style_border_width(ui->screen_1_label_5, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_radius(ui->screen_1_label_5, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(ui->screen_1_label_5, lv_color_hex(0x4b00ff), LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->screen_1_label_5, &lv_font_SourceHanSerifSC_Regular_24, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_opa(ui->screen_1_label_5, 255, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_letter_space(ui->screen_1_label_5, 5, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_line_space(ui->screen_1_label_5, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_text_align(ui->screen_1_label_5, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(ui->screen_1_label_5, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_top(ui->screen_1_label_5, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_right(ui->screen_1_label_5, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_bottom(ui->screen_1_label_5, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_left(ui->screen_1_label_5, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
+    lv_obj_set_style_shadow_width(ui->screen_1_label_5, 0, LV_PART_MAIN|LV_STATE_DEFAULT);
 
     //The custom code of screen_1.
 

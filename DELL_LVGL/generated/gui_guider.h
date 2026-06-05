@@ -55,6 +55,7 @@ typedef struct
 	lv_obj_t *screen_1_label_2;
 	lv_obj_t *screen_1_label_3;
 	lv_obj_t *screen_1_label_4;
+	lv_obj_t *screen_1_label_5;
 }lv_ui;
 
 typedef void (*ui_setup_scr_t)(lv_ui * ui);
