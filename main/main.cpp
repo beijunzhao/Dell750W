@@ -771,58 +771,95 @@ static void handle_buttons(void)
         return;
     }
 
-    // ===== 正常模式 =====
-
-    // ---- 长按 OK 检测: 进入校准模式 ----
-    if (btnOk) {
-        if (!okWasPressed) {
-            okWasPressed = true;
-            okPressStart = now;
-        }
-        // 长按 2 秒进入校准
-        if ((now - okPressStart) >= LONG_PRESS_MS) {
-            ESP_LOGI(TAG, "Long press OK detected, entering calibration mode");
-            okWasPressed = false;
-            calibration_start();
-            return;
-        }
-    } else {
-        okWasPressed = false;
-    }
-
-    // ---- 短按处理 (200ms 去抖) ----
-    if ((now - lastBtnTime) < 200) return;
-    if (!btnUp && !btnDown && !btnOk) return;
-    lastBtnTime = now;
-
-    float vSet = PowerControl::getSetVoltage();
-
-    if (btnUp) {
-        vSet += 0.1f;
-        if (vSet > PSU_VOLTAGE_MAX) vSet = PSU_VOLTAGE_MAX;
-        PowerControl::setVoltage(vSet);
-        ESP_LOGI(TAG, "BTN_UP: V_set=%.1fV", vSet);
-    }
-    else if (btnDown) {
-        vSet -= 0.1f;
-        if (vSet < 0.0f) vSet = 0.0f;
-        PowerControl::setVoltage(vSet);
-        ESP_LOGI(TAG, "BTN_DOWN: V_set=%.1fV", vSet);
-    }
-    else if (btnOk) {
-        // 短按 OK: 切换电源开关
-        if (PowerControl::isPoweredOn()) {
-            PowerControl::powerOff();
-            ESP_LOGI(TAG, "BTN_OK: Power OFF");
+    // ===== 正常模式: 按键路由到 LVGL UI 焦点导航 =====
+    if (lvgl_ui_is_ready()) {
+        // ---- 长按 OK 检测 (2秒): 进入校准模式 ----
+        if (btnOk) {
+            if (!okWasPressed) {
+                okWasPressed = true;
+                okPressStart = now;
+            }
+            if ((now - okPressStart) >= LONG_PRESS_MS) {
+                ESP_LOGI(TAG, "Long press OK detected, entering calibration mode");
+                okWasPressed = false;
+                calibration_start();
+                return;
+            }
         } else {
-            PowerControl::powerOn();
-            ESP_LOGI(TAG, "BTN_OK: Power ON");
+            okWasPressed = false;
         }
+
+        // ---- 短按处理 (150ms 去抖) ----
+        if ((now - lastBtnTime) < 150) return;
+        if (!btnUp && !btnDown && !btnOk) return;
+        lastBtnTime = now;
+
+        if (btnUp) {
+            lvgl_port_lock(0);
+            lvgl_ui_handle_key(LVGL_KEY_UP);
+            lvgl_port_unlock();
+        } else if (btnDown) {
+            lvgl_port_lock(0);
+            lvgl_ui_handle_key(LVGL_KEY_DOWN);
+            lvgl_port_unlock();
+        } else if (btnOk) {
+            lvgl_port_lock(0);
+            lvgl_ui_handle_key(LVGL_KEY_OK);
+            lvgl_port_unlock();
+        }
+
+        // 如果 BLE 已连接, 推送状态更新
+        if (ble_server_is_connected()) {
+            const char* json = build_full_data_json();
+            send_response(json);
+        }
+        return;
     }
 
-    // 如果 BLE 已连接, 推送状态更新
-    if (ble_server_is_connected()) {
-        const char* json = build_full_data_json();
-        send_response(json);
+    // ===== 非 LVGL UI 模式: 旧版按键处理 (后备) =====
+    {
+        // ---- 长按 OK 检测 ----
+        if (btnOk) {
+            if (!okWasPressed) {
+                okWasPressed = true;
+                okPressStart = now;
+            }
+            if ((now - okPressStart) >= LONG_PRESS_MS) {
+                ESP_LOGI(TAG, "Long press OK, entering calibration mode");
+                okWasPressed = false;
+                calibration_start();
+                return;
+            }
+        } else {
+            okWasPressed = false;
+        }
+
+        if ((now - lastBtnTime) < 200) return;
+        if (!btnUp && !btnDown && !btnOk) return;
+        lastBtnTime = now;
+
+        float vSet = PowerControl::getSetVoltage();
+
+        if (btnUp) {
+            vSet += 0.1f;
+            if (vSet > PSU_VOLTAGE_MAX) vSet = PSU_VOLTAGE_MAX;
+            PowerControl::setVoltage(vSet);
+            ESP_LOGI(TAG, "BTN_UP: V_set=%.1fV", vSet);
+        }
+        else if (btnDown) {
+            vSet -= 0.1f;
+            if (vSet < 0.0f) vSet = 0.0f;
+            PowerControl::setVoltage(vSet);
+            ESP_LOGI(TAG, "BTN_DOWN: V_set=%.1fV", vSet);
+        }
+        else if (btnOk) {
+            if (PowerControl::isPoweredOn()) {
+                PowerControl::powerOff();
+                ESP_LOGI(TAG, "BTN_OK: Power OFF");
+            } else {
+                PowerControl::powerOn();
+                ESP_LOGI(TAG, "BTN_OK: Power ON");
+            }
+        }
     }
 }

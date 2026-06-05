@@ -9,6 +9,29 @@ idf_component_register(
         "lvgl_setup.cpp"
         "lvgl_ui.cpp"
         "calibration.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/gui_guider.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/setup_scr_screen.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/widgets_init.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/events_init.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/guider_fonts/lv_font_SourceHanSerifSC_Regular_31.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/guider_fonts/lv_font_SourceHanSerifSC_Regular_10.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/guider_fonts/lv_font_SourceHanSerifSC_Regular_13.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/guider_fonts/lv_font_SourceHanSerifSC_Regular_14.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/guider_fonts/lv_font_SourceHanSerifSC_Regular_15.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/guider_fonts/lv_font_SourceHanSerifSC_Regular_17.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/guider_fonts/lv_font_SourceHanSerifSC_Regular_19.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/guider_fonts/lv_font_SourceHanSerifSC_Regular_20.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/guider_fonts/lv_font_SourceHanSerifSC_Regular_22.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/guider_fonts/lv_font_SourceHanSerifSC_Regular_33.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/guider_fonts/lv_font_SourceHanSerifSC_Regular_36.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/guider_fonts/lv_font_montserratMedium_22.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/guider_fonts/lv_font_montserratMedium_23.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/guider_fonts/lv_font_montserratMedium_16.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/guider_fonts/lv_font_SourceHanSerifSC_Regular_16.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/guider_fonts/lv_font_SourceHanSerifSC_Regular_25.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/images/_fensghan_RGB565A8_24x23.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/images/_wendyu_RGB565A8_19x21.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/custom/custom.c"
     PRIV_REQUIRES
         nvs_flash
         esp_driver_gpio
@@ -21,9 +44,15 @@ idf_component_register(
         esp_lvgl_port
     INCLUDE_DIRS
         "."
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/guider_fonts"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/guider_customer_fonts"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/generated/images"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../DELL_LVGL/custom"
 )
 
 # ble_server.cpp 使用 designated initializers 初始化 NimBLE 结构体，
 # 编译器 -Wmissing-field-initializers 会误报，此处禁用
 idf_component_get_property(main_component main COMPONENT_LIB)
 target_compile_options(${main_component} PRIVATE -Wno-missing-field-initializers)
+target_compile_options(${main_component} PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-Wno-deprecated-enum-enum-conversion>")

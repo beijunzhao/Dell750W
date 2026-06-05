@@ -3,22 +3,8 @@
  *
  * 屏幕: ST7789P3 240x296 → LVGL 旋转 270° → 296x240 横屏
  *
- * 设计风格: 科技暗黑 + 手机App风格 + 单页极简
- *
- * 布局 (横屏 296x240):
- *   ┌──────────────────────────────────────────┐
- *   │  DELTA POWER                    ● ONLINE  │ ← 标题栏 (28px)
- *   │──────────────────────────────────────────│
- *   │  12.05                                    │
-   │  VOLTS                                    │ ← 电压大数字 (28px)
- *   │                                          │
- *   │  ┌──────┐ ┌──────┐ ┌──────┐              │
- *   │  │ 5.2A │ │ 62W  │ │ 94%  │              │ ← 数据卡片 (24px)
- *   │  │ 电流  │ │ 功率  │ │ 效率  │              │
- *   │  └──────┘ └──────┘ └──────┘              │
- *   │                                          │
- *   │  INPUT 220V  TEMP 45°C  FAN 3200RPM      │ ← 底部状态 (14px)
- *   └──────────────────────────────────────────┘
+ * UI 由 NXP GUI Guider 设计, 生成文件在 DELL_LVGL/generated/
+ * 此文件负责对接 GUI Guider UI 与项目数据源
  */
 #include "lvgl_ui.h"
 #include "lvgl.h"
@@ -27,399 +13,259 @@
 #include "power_control.h"
 #include "pin_map.h"
 
+#include "gui_guider.h"
+
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 static const char *TAG = "LVGL_UI";
+lv_ui guider_ui;
 
-/* ========== LVGL 对象句柄 ========== */
 static bool s_ui_ready = false;
-
-/* 标题栏 */
-static lv_obj_t *s_label_title  = NULL;
-static lv_obj_t *s_label_status = NULL;
-
-/* 电压区 */
-static lv_obj_t *s_label_voltage = NULL;
-static lv_obj_t *s_label_v_unit  = NULL;
-
-/* 三列数据卡片 */
-static lv_obj_t *s_card_current_val = NULL;
-static lv_obj_t *s_card_power_val   = NULL;
-static lv_obj_t *s_card_eff_val     = NULL;
-
-/* 底部状态 */
-static lv_obj_t *s_label_input = NULL;
-static lv_obj_t *s_label_temp  = NULL;
-static lv_obj_t *s_label_fan   = NULL;
-
-/* 更新定时器 */
 static lv_timer_t *s_update_timer = NULL;
 
-/* ========== 颜色 (科技暗黑主题) ========== */
-#define C_BLACK       lv_color_make(0x00, 0x00, 0x00)
-#define C_WHITE       lv_color_make(0xFF, 0xFF, 0xFF)
-#define C_CYAN        lv_color_make(0x00, 0xE5, 0xFF)   /* 亮青 #00E5FF */
-#define C_CYAN_DIM    lv_color_make(0x00, 0x80, 0x99)   /* 暗青 */
-#define C_CYAN_DARK   lv_color_make(0x00, 0x33, 0x44)   /* 深青 */
-#define C_GREEN       lv_color_make(0x00, 0xE6, 0x76)   /* 亮绿 */
-#define C_RED         lv_color_make(0xFF, 0x17, 0x44)   /* 亮红 */
-#define C_ORANGE      lv_color_make(0xFF, 0x91, 0x00)   /* 橙色 */
-#define C_GOLD        lv_color_make(0xFF, 0xD5, 0x4F)   /* 金色 */
-#define C_PURPLE      lv_color_make(0x7C, 0x4D, 0xFF)   /* 紫色 */
-#define C_GRAY        lv_color_make(0x78, 0x90, 0x9C)   /* 蓝灰 */
-#define C_DIM         lv_color_make(0x45, 0x5A, 0x64)   /* 暗蓝灰 */
-#define C_CARD_BG     lv_color_make(0x08, 0x12, 0x1A)   /* 卡片背景 */
-#define C_CARD_BDR    lv_color_make(0x0E, 0x25, 0x33)   /* 卡片边框 */
+/* ========== 运行时间 ========== */
+static uint32_t s_run_sec = 0;      /* 累计运行秒数 */
+static uint32_t s_run_tick = 0;     /* 本次开机时的系统秒数 */
 
-/* ========== 字体 ========== */
-#define FONT_TITLE  (&lv_font_montserrat_20)
-#define FONT_VOLT   (&lv_font_montserrat_28)
-#define FONT_CARD   (&lv_font_montserrat_24)
-#define FONT_SMALL  (&lv_font_montserrat_14)
+static inline uint32_t _now_sec(void) {
+    return (uint32_t)(esp_timer_get_time() / 1000000ULL);
+}
 
-/* ========== 布局常量 ========== */
-#define SCR_W       296
-#define SCR_H       240
-#define HEADER_H    28
-#define CARD_W      88
-#define CARD_H      72
-#define CARD_Y      108
-#define CARD_GAP    8
-#define CARD_X0     10
+static void _run_stop(void) {
+    if (s_run_tick > 0) {
+        s_run_sec += _now_sec() - s_run_tick;
+        s_run_tick = 0;
+    }
+}
 
-/* ========== 前向声明 ========== */
-static void _create_header(lv_obj_t *parent);
-static void _create_voltage_area(lv_obj_t *parent);
-static lv_obj_t *_create_card(lv_obj_t *parent, int x, const char *title,
-                              const char *unit, lv_color_t accent);
-static void _create_data_cards(lv_obj_t *parent);
-static void _create_status_bar(lv_obj_t *parent);
-static void _update_timer_cb(lv_timer_t *timer);
-static void _update_all(void);
+static void _run_start(void) {
+    s_run_tick = _now_sec();
+}
+
+static uint32_t _run_total(void) {
+    uint32_t t = s_run_sec;
+    if (s_run_tick > 0) t += _now_sec() - s_run_tick;
+    return t;
+}
+
+/* ========== 焦点导航 ========== */
+
+#define FOCUS_COUNT 3
+typedef enum { FOCUS_POWER = 0, FOCUS_VSET, FOCUS_ISET } focus_t;
+static int s_focus = FOCUS_POWER;
+
+typedef enum { EDIT_NONE, EDIT_V, EDIT_I } edit_t;
+static edit_t s_edit = EDIT_NONE;
+static int s_epos = 0;
+static bool s_blink = true;
+
+static void _apply_focus(void);
+static void _clear_focus(void);
+static void _enter_edit(edit_t mode);
+static void _exit_edit(void);
+static void _ed_up(void);
+static void _ed_dn(void);
+static void _ed_ok(void);
+static void _ed_show(void);
 
 /* ========== 公开 API ========== */
 
 void lvgl_ui_init(void)
 {
-    if (s_ui_ready) {
-        ESP_LOGW(TAG, "UI already initialized");
-        return;
-    }
-
+    if (s_ui_ready) return;
     ESP_LOGI(TAG, "========== LVGL UI Init ==========");
 
-    lv_obj_t *scr = lv_screen_active();
+    setup_ui(&guider_ui);
+    s_update_timer = lv_timer_create([](lv_timer_t *t) {
+        (void)t; if (!s_ui_ready) return;
+        lv_ui *u = &guider_ui;
+        if (!u->screen) return;
+        char b[24];
 
-    /* 纯黑背景 */
-    lv_obj_set_style_bg_color(scr, C_BLACK, 0);
-    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_all(scr, 0, 0);
+        if (s_edit != EDIT_NONE) s_blink = !s_blink;
 
-    /* 创建各区域 */
-    _create_header(scr);
-    _create_voltage_area(scr);
-    _create_data_cards(scr);
-    _create_status_bar(scr);
+        /* 电压 */
+        { float v = ADCSampler::getVoltage(); int ip = (int)v, fp = (int)((v-ip)*100+0.5f); if(fp>=100){ip++;fp=0;} snprintf(b,sizeof(b),"%02d.%02d",ip,fp); lv_label_set_text(u->screen_label_49, b); }
+        /* 电流 */
+        { float v = PMBus::I_out; int ip = (int)v, fp = (int)((v-ip)*100+0.5f); if(fp>=100){ip++;fp=0;} snprintf(b,sizeof(b),"%02d.%02d",ip,fp); lv_label_set_text(u->screen_label_33, b); }
+        /* 功率 */
+        { float v = PMBus::W_out; if(v>=100) snprintf(b,sizeof(b),"%.0f",v); else if(v>=10) snprintf(b,sizeof(b),"%.1f",v); else{int ip=(int)v,fp=(int)((v-ip)*100+0.5f);if(fp>=100){ip++;fp=0;} snprintf(b,sizeof(b),"%02d.%02d",ip,fp);} lv_label_set_text(u->screen_label_34, b); }
 
-    /* 创建定时器: 每 500ms 更新 */
-    s_update_timer = lv_timer_create(_update_timer_cb, 500, NULL);
+        /* 电压设置 */
+        if (u->screen_label_52) {
+            if (s_edit == EDIT_V) _ed_show();
+            else { float v = PowerControl::getSetVoltage(); int ip=(int)v,fp=(int)((v-ip)*100+0.5f); if(fp>=100){ip++;fp=0;} snprintf(b,sizeof(b),"%02d.%02d",ip,fp); lv_label_set_text(u->screen_label_52, b); }
+        }
+        /* 电流设置 */
+        if (u->screen_label_54) {
+            if (s_edit == EDIT_I) _ed_show();
+            else { float v = PowerControl::getSetCurrent(); int ip=(int)v,fp=(int)((v-ip)*100+0.5f); if(fp>=100){ip++;fp=0;} snprintf(b,sizeof(b),"%02d.%02d",ip,fp); lv_label_set_text(u->screen_label_54, b); }
+        }
+
+        /* 电源按钮 */
+        if (u->screen_btn_1_label) {
+            if (PowerControl::isPoweredOn()) {
+                lv_label_set_text(u->screen_btn_1_label, "ON");
+                lv_obj_set_style_bg_color(u->screen_btn_1, lv_color_hex(0x00E676), (uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);
+            } else {
+                lv_label_set_text(u->screen_btn_1_label, "OFF");
+                lv_obj_set_style_bg_color(u->screen_btn_1, lv_color_hex(0xFF1744), (uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);
+            }
+        }
+
+        /* 能量 */
+        if (u->screen_label_46) { float wh=PMBus::E_out, v=ADCSampler::getVoltage(); float ah=(v>1)?(wh/v):0; snprintf(b,sizeof(b),"%06.2f",ah); lv_label_set_text(u->screen_label_46, b); }
+        if (u->screen_label_45) { float e=PMBus::E_out; snprintf(b,sizeof(b),"%06.2f",e); lv_label_set_text(u->screen_label_45, b); }
+
+        /* 运行时间 (强制转为 int 避免格式问题) */
+        if (u->screen_label_51) {
+            uint32_t total = _run_total();
+            snprintf(b, sizeof(b), "%02d:%02d:%02d",
+                     (int)(total / 3600),
+                     (int)((total % 3600) / 60),
+                     (int)(total % 60));
+            lv_label_set_text(u->screen_label_51, b);
+        }
+
+        /* 风扇温度 */
+        if (u->screen_label_42) { snprintf(b,sizeof(b),"%.0f",PMBus::fanSpeed[0]); lv_label_set_text(u->screen_label_42, b); }
+        if (u->screen_label_43) { snprintf(b,sizeof(b),"%.0f",PMBus::temperature[0]); lv_label_set_text(u->screen_label_43, b); }
+        if (u->screen_label_44) { snprintf(b,sizeof(b),"%.0f",PMBus::temperature[1]); lv_label_set_text(u->screen_label_44, b); }
+    }, 500, NULL);
     lv_timer_ready(s_update_timer);
 
+    s_focus = FOCUS_POWER;
+    s_edit = EDIT_NONE;
+    s_run_sec = 0; s_run_tick = 0;
+    if (PowerControl::isPoweredOn()) s_run_tick = _now_sec();
+
+    _apply_focus();
     s_ui_ready = true;
     ESP_LOGI(TAG, "========== LVGL UI Ready ==========");
 }
 
-void lvgl_ui_deinit(void)
+void lvgl_ui_deinit(void) { if(!s_ui_ready)return; if(s_update_timer){lv_timer_delete(s_update_timer);s_update_timer=NULL;} s_ui_ready=false; }
+bool lvgl_ui_is_ready(void) { return s_ui_ready; }
+
+void lvgl_ui_handle_key(lvgl_key_t key)
 {
     if (!s_ui_ready) return;
 
-    if (s_update_timer) {
-        lv_timer_delete(s_update_timer);
-        s_update_timer = NULL;
-    }
-
-    s_ui_ready = false;
-    ESP_LOGI(TAG, "LVGL UI deinitialized");
-}
-
-/* ========== 顶部标题栏 ========== */
-
-static void _create_header(lv_obj_t *parent)
-{
-    /* 标题栏背景 */
-    lv_obj_t *hdr = lv_obj_create(parent);
-    lv_obj_set_size(hdr, SCR_W, HEADER_H);
-    lv_obj_set_pos(hdr, 0, 0);
-    lv_obj_set_style_bg_color(hdr, C_BLACK, 0);
-    lv_obj_set_style_bg_opa(hdr, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(hdr, 0, 0);
-    lv_obj_set_style_radius(hdr, 0, 0);
-    lv_obj_set_style_pad_all(hdr, 0, 0);
-
-    /* 左侧青色装饰条 */
-    lv_obj_t *bar = lv_obj_create(hdr);
-    lv_obj_set_size(bar, 3, 16);
-    lv_obj_set_pos(bar, 8, 6);
-    lv_obj_set_style_bg_color(bar, C_CYAN, 0);
-    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(bar, 0, 0);
-    lv_obj_set_style_radius(bar, 1, 0);
-
-    /* 标题 */
-    s_label_title = lv_label_create(hdr);
-    lv_label_set_text(s_label_title, "DELTA POWER");
-    lv_obj_set_pos(s_label_title, 18, 4);
-    lv_obj_set_style_text_color(s_label_title, C_WHITE, 0);
-    lv_obj_set_style_text_font(s_label_title, FONT_TITLE, 0);
-
-    /* 右上角状态 */
-    s_label_status = lv_label_create(hdr);
-    lv_label_set_text(s_label_status, "● ONLINE");
-    lv_obj_set_pos(s_label_status, 200, 5);
-    lv_obj_set_style_text_color(s_label_status, C_GREEN, 0);
-    lv_obj_set_style_text_font(s_label_status, FONT_SMALL, 0);
-
-    /* 分隔线 */
-    lv_obj_t *line = lv_obj_create(parent);
-    lv_obj_set_size(line, SCR_W, 1);
-    lv_obj_set_pos(line, 0, HEADER_H);
-    lv_obj_set_style_bg_color(line, C_CYAN_DARK, 0);
-    lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(line, 0, 0);
-    lv_obj_set_style_radius(line, 0, 0);
-}
-
-/* ========== 电压大数字区域 ========== */
-
-static void _create_voltage_area(lv_obj_t *parent)
-{
-    /* 电压数字 (28px, 居中) */
-    s_label_voltage = lv_label_create(parent);
-    lv_label_set_text(s_label_voltage, "0.00");
-    lv_obj_set_pos(s_label_voltage, 0, 38);
-    lv_obj_set_width(s_label_voltage, SCR_W);
-    lv_obj_set_style_text_color(s_label_voltage, C_WHITE, 0);
-    lv_obj_set_style_text_font(s_label_voltage, FONT_VOLT, 0);
-    lv_obj_set_style_text_align(s_label_voltage, LV_TEXT_ALIGN_CENTER, 0);
-
-    /* VOLTS 标签 */
-    s_label_v_unit = lv_label_create(parent);
-    lv_label_set_text(s_label_v_unit, "VOLTS");
-    lv_obj_set_pos(s_label_v_unit, 0, 76);
-    lv_obj_set_width(s_label_v_unit, SCR_W);
-    lv_obj_set_style_text_color(s_label_v_unit, C_CYAN_DIM, 0);
-    lv_obj_set_style_text_font(s_label_v_unit, FONT_SMALL, 0);
-    lv_obj_set_style_text_align(s_label_v_unit, LV_TEXT_ALIGN_CENTER, 0);
-}
-
-/* ========== 数据卡片 ========== */
-
-static lv_obj_t *_create_card(lv_obj_t *parent, int x, const char *title,
-                              const char *unit, lv_color_t accent)
-{
-    lv_obj_t *card = lv_obj_create(parent);
-    lv_obj_set_size(card, CARD_W, CARD_H);
-    lv_obj_set_pos(card, x, CARD_Y);
-    lv_obj_set_style_bg_color(card, C_CARD_BG, 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(card, C_CARD_BDR, 0);
-    lv_obj_set_style_border_width(card, 1, 0);
-    lv_obj_set_style_radius(card, 6, 0);
-    lv_obj_set_style_pad_all(card, 0, 0);
-
-    /* 顶部装饰条 (2px, 对应颜色) */
-    lv_obj_t *top = lv_obj_create(card);
-    lv_obj_set_size(top, CARD_W, 2);
-    lv_obj_set_pos(top, 0, 0);
-    lv_obj_set_style_bg_color(top, accent, 0);
-    lv_obj_set_style_bg_opa(top, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(top, 0, 0);
-    lv_obj_set_style_radius(top, 0, 0);
-
-    /* 数值 (24px) */
-    lv_obj_t *val = lv_label_create(card);
-    lv_label_set_text(val, "0");
-    lv_obj_set_pos(val, 0, 10);
-    lv_obj_set_width(val, CARD_W);
-    lv_obj_set_style_text_color(val, C_WHITE, 0);
-    lv_obj_set_style_text_align(val, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(val, FONT_CARD, 0);
-
-    /* 标题 */
-    lv_obj_t *lbl = lv_label_create(card);
-    lv_label_set_text(lbl, title);
-    lv_obj_set_pos(lbl, 0, 44);
-    lv_obj_set_width(lbl, CARD_W);
-    lv_obj_set_style_text_color(lbl, C_DIM, 0);
-    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(lbl, FONT_SMALL, 0);
-
-    /* 单位 */
-    lv_obj_t *unit_lbl = lv_label_create(card);
-    lv_label_set_text(unit_lbl, unit);
-    lv_obj_set_pos(unit_lbl, 0, 58);
-    lv_obj_set_width(unit_lbl, CARD_W);
-    lv_obj_set_style_text_color(unit_lbl, accent, 0);
-    lv_obj_set_style_text_align(unit_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(unit_lbl, FONT_SMALL, 0);
-
-    (void)lbl;
-    (void)unit_lbl;
-    return val;
-}
-
-static void _create_data_cards(lv_obj_t *parent)
-{
-    int x1 = CARD_X0;
-    int x2 = CARD_X0 + CARD_W + CARD_GAP;
-    int x3 = CARD_X0 + (CARD_W + CARD_GAP) * 2;
-
-    s_card_current_val = _create_card(parent, x1, "电流", "A", C_CYAN);
-    s_card_power_val   = _create_card(parent, x2, "功率", "W", C_PURPLE);
-    s_card_eff_val     = _create_card(parent, x3, "效率", "%", C_GOLD);
-}
-
-/* ========== 底部状态栏 ========== */
-
-static void _create_status_bar(lv_obj_t *parent)
-{
-    int bar_y = 195;
-
-    /* 分隔线 */
-    lv_obj_t *line = lv_obj_create(parent);
-    lv_obj_set_size(line, SCR_W - 20, 1);
-    lv_obj_set_pos(line, 10, bar_y);
-    lv_obj_set_style_bg_color(line, C_CYAN_DARK, 0);
-    lv_obj_set_style_bg_opa(line, 80, 0);
-    lv_obj_set_style_border_width(line, 0, 0);
-    lv_obj_set_style_radius(line, 0, 0);
-
-    /* 输入电压 */
-    s_label_input = lv_label_create(parent);
-    lv_label_set_text(s_label_input, "IN: --V");
-    lv_obj_set_pos(s_label_input, 12, bar_y + 8);
-    lv_obj_set_style_text_color(s_label_input, C_GRAY, 0);
-    lv_obj_set_style_text_font(s_label_input, FONT_SMALL, 0);
-
-    /* 温度 */
-    s_label_temp = lv_label_create(parent);
-    lv_label_set_text(s_label_temp, "TEMP: --°C");
-    lv_obj_set_pos(s_label_temp, 108, bar_y + 8);
-    lv_obj_set_style_text_color(s_label_temp, C_GRAY, 0);
-    lv_obj_set_style_text_font(s_label_temp, FONT_SMALL, 0);
-
-    /* 风扇 */
-    s_label_fan = lv_label_create(parent);
-    lv_label_set_text(s_label_fan, "FAN: --RPM");
-    lv_obj_set_pos(s_label_fan, 204, bar_y + 8);
-    lv_obj_set_style_text_color(s_label_fan, C_GRAY, 0);
-    lv_obj_set_style_text_font(s_label_fan, FONT_SMALL, 0);
-}
-
-/* ========== 数据更新 ========== */
-
-static void _update_timer_cb(lv_timer_t *timer)
-{
-    (void)timer;
-    _update_all();
-}
-
-static void _update_all(void)
-{
-    float v_out = ADCSampler::getVoltage();
-    float i_out = PMBus::I_out;
-    float w_out = PMBus::W_out;
-    float v_in  = PMBus::V_in;
-    float w_in  = PMBus::W_in;
-    float temp1 = PMBus::temperature[0];
-    float temp2 = PMBus::temperature[1];
-    float fan   = PMBus::fanSpeed[0];
-    bool  powerOn  = PowerControl::isPoweredOn();
-    bool  deviceOk = PMBus::isDeviceOnline();
-
-    char buf[24];
-
-    /* ---- 标题栏状态 ---- */
-    if (!deviceOk) {
-        lv_label_set_text(s_label_status, "● NO PSU");
-        lv_obj_set_style_text_color(s_label_status, C_RED, 0);
-    } else if (powerOn) {
-        lv_label_set_text(s_label_status, "● ONLINE");
-        lv_obj_set_style_text_color(s_label_status, C_GREEN, 0);
-    } else {
-        lv_label_set_text(s_label_status, "● STANDBY");
-        lv_obj_set_style_text_color(s_label_status, C_ORANGE, 0);
-    }
-
-    /* ---- 电压 (大字) ---- */
-    snprintf(buf, sizeof(buf), "%.2f", v_out);
-    lv_label_set_text(s_label_voltage, buf);
-
-    /* ---- 电流 ---- */
-    snprintf(buf, sizeof(buf), "%.1f", i_out);
-    lv_label_set_text(s_card_current_val, buf);
-
-    /* ---- 功率 ---- */
-    if (w_out >= 100.0f) {
-        snprintf(buf, sizeof(buf), "%.0f", w_out);
-    } else if (w_out >= 10.0f) {
-        snprintf(buf, sizeof(buf), "%.1f", w_out);
-    } else {
-        snprintf(buf, sizeof(buf), "%.2f", w_out);
-    }
-    lv_label_set_text(s_card_power_val, buf);
-
-    /* ---- 效率 ---- */
-    if (deviceOk && w_in > 0 && w_out >= 0) {
-        float eff = (w_out / w_in) * 100.0f;
-        if (eff > 100.0f) eff = 100.0f;
-        snprintf(buf, sizeof(buf), "%.1f", eff);
-        lv_label_set_text(s_card_eff_val, buf);
-        if (eff > 90.0f) {
-            lv_obj_set_style_text_color(s_card_eff_val, C_GREEN, 0);
-        } else if (eff > 70.0f) {
-            lv_obj_set_style_text_color(s_card_eff_val, C_ORANGE, 0);
-        } else {
-            lv_obj_set_style_text_color(s_card_eff_val, C_RED, 0);
+    if (s_edit != EDIT_NONE) {
+        switch (key) {
+        case LVGL_KEY_UP: _ed_up(); break;
+        case LVGL_KEY_DOWN: _ed_dn(); break;
+        case LVGL_KEY_OK: _ed_ok(); break;
+        case LVGL_KEY_OK_LONG: _exit_edit(); break;
         }
-    } else {
-        lv_label_set_text(s_card_eff_val, "--");
-        lv_obj_set_style_text_color(s_card_eff_val, C_DIM, 0);
+        return;
     }
 
-    /* ---- 输入电压 ---- */
-    if (deviceOk && v_in > 0) {
-        snprintf(buf, sizeof(buf), "IN: %.0fV", v_in);
-    } else {
-        snprintf(buf, sizeof(buf), "IN: --V");
-    }
-    lv_label_set_text(s_label_input, buf);
-
-    /* ---- 温度 ---- */
-    float maxTemp = (temp1 > temp2) ? temp1 : temp2;
-    if (deviceOk && maxTemp > 0) {
-        snprintf(buf, sizeof(buf), "TEMP: %.0f°C", maxTemp);
-        lv_label_set_text(s_label_temp, buf);
-        if (maxTemp > 80.0f) {
-            lv_obj_set_style_text_color(s_label_temp, C_RED, 0);
-        } else if (maxTemp > 60.0f) {
-            lv_obj_set_style_text_color(s_label_temp, C_ORANGE, 0);
-        } else {
-            lv_obj_set_style_text_color(s_label_temp, C_GRAY, 0);
+    switch (key) {
+    case LVGL_KEY_UP:
+        s_focus = (s_focus + FOCUS_COUNT - 1) % FOCUS_COUNT;
+        _apply_focus();
+        break;
+    case LVGL_KEY_DOWN:
+        s_focus = (s_focus + 1) % FOCUS_COUNT;
+        _apply_focus();
+        break;
+    case LVGL_KEY_OK:
+        switch (s_focus) {
+        case FOCUS_POWER:
+            if (PowerControl::isPoweredOn()) { PowerControl::powerOff(); _run_stop(); }
+            else { PowerControl::powerOn(); _run_start(); }
+            break;
+        case FOCUS_VSET: _enter_edit(EDIT_V); break;
+        case FOCUS_ISET: _enter_edit(EDIT_I); break;
         }
-    } else {
-        lv_label_set_text(s_label_temp, "TEMP: --°C");
-        lv_obj_set_style_text_color(s_label_temp, C_GRAY, 0);
+        break;
+    case LVGL_KEY_OK_LONG:
+        break;
     }
+}
 
-    /* ---- 风扇 ---- */
-    if (deviceOk && fan > 0) {
-        snprintf(buf, sizeof(buf), "FAN: %.0fRPM", fan);
-    } else {
-        snprintf(buf, sizeof(buf), "FAN: --RPM");
+/* ========== 焦点样式 ========== */
+
+static void _apply_focus(void)
+{
+    lv_ui *u = &guider_ui; if(!u->screen) return;
+    _clear_focus();
+    switch (s_focus) {
+    case FOCUS_POWER:
+        if(u->screen_btn_1) { lv_obj_set_style_border_width(u->screen_btn_1,3,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); lv_obj_set_style_border_color(u->screen_btn_1,lv_color_hex(0xFFFF00),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); lv_obj_set_style_border_opa(u->screen_btn_1,255,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); }
+        break;
+    case FOCUS_VSET:
+        if(u->screen_label_23) { lv_obj_set_style_border_width(u->screen_label_23,3,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); lv_obj_set_style_border_color(u->screen_label_23,lv_color_hex(0xFFFF00),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); lv_obj_set_style_border_opa(u->screen_label_23,255,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); lv_obj_set_style_bg_color(u->screen_label_23,lv_color_hex(0x1A3344),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); }
+        if(u->screen_label_52) lv_obj_set_style_text_color(u->screen_label_52,lv_color_hex(0xFFFF00),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);
+        break;
+    case FOCUS_ISET:
+        if(u->screen_label_28) { lv_obj_set_style_border_width(u->screen_label_28,3,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); lv_obj_set_style_border_color(u->screen_label_28,lv_color_hex(0xFFFF00),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); lv_obj_set_style_border_opa(u->screen_label_28,255,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); lv_obj_set_style_bg_color(u->screen_label_28,lv_color_hex(0x1A3344),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); }
+        if(u->screen_label_54) lv_obj_set_style_text_color(u->screen_label_54,lv_color_hex(0xFFFF00),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);
+        break;
     }
-    lv_label_set_text(s_label_fan, buf);
+}
+
+static void _clear_focus(void)
+{
+    lv_ui *u = &guider_ui; if(!u->screen) return;
+    if(u->screen_btn_1) lv_obj_set_style_border_width(u->screen_btn_1,0,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);
+    if(u->screen_label_23){ lv_obj_set_style_border_width(u->screen_label_23,4,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); lv_obj_set_style_border_color(u->screen_label_23,lv_color_hex(0x2195f6),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); lv_obj_set_style_border_opa(u->screen_label_23,0,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); }
+    if(u->screen_label_28){ lv_obj_set_style_border_width(u->screen_label_28,4,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); lv_obj_set_style_border_color(u->screen_label_28,lv_color_hex(0x2195f6),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); lv_obj_set_style_border_opa(u->screen_label_28,0,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); }
+    if(u->screen_label_52) lv_obj_set_style_text_color(u->screen_label_52,lv_color_hex(0x00FF55),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);
+    if(u->screen_label_54) lv_obj_set_style_text_color(u->screen_label_54,lv_color_hex(0x00FF55),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);
+    if(u->screen_label_23) lv_obj_set_style_bg_color(u->screen_label_23,lv_color_hex(0x2194f4),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);
+    if(u->screen_label_28) lv_obj_set_style_bg_color(u->screen_label_28,lv_color_hex(0x2194f4),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);
+}
+
+/* ========== 编辑模式 ========== */
+
+static void _digits(float v, int d[4]) {
+    int ip = (int)v; if(ip<0)ip=0; if(ip>99)ip=99;
+    int fp = (int)((v-ip)*100+0.5f); if(fp>=100){ip++;fp=0;} if(fp<0)fp=0;
+    d[0]=ip/10; d[1]=ip%10; d[2]=fp/10; d[3]=fp%10;
+}
+
+static float _value(const int d[4]) { return (float)(d[0]*10+d[1]) + (float)(d[2]*10+d[3])/100.0f; }
+
+static void _enter_edit(edit_t mode) {
+    s_edit = mode; s_epos = 0; s_blink = true;
+    lv_ui *u = &guider_ui;
+    if(mode==EDIT_V && u->screen_label_23) { lv_obj_set_style_border_width(u->screen_label_23,3,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); lv_obj_set_style_border_color(u->screen_label_23,lv_color_hex(0xFF00FF),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); lv_obj_set_style_border_opa(u->screen_label_23,255,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); lv_obj_set_style_bg_color(u->screen_label_23,lv_color_hex(0x331144),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); }
+    if(mode==EDIT_V && u->screen_label_52) lv_obj_set_style_text_color(u->screen_label_52,lv_color_hex(0xFF00FF),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);
+    if(mode==EDIT_I && u->screen_label_28) { lv_obj_set_style_border_width(u->screen_label_28,3,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); lv_obj_set_style_border_color(u->screen_label_28,lv_color_hex(0xFF00FF),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); lv_obj_set_style_border_opa(u->screen_label_28,255,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); lv_obj_set_style_bg_color(u->screen_label_28,lv_color_hex(0x331144),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT); }
+    if(mode==EDIT_I && u->screen_label_54) lv_obj_set_style_text_color(u->screen_label_54,lv_color_hex(0xFF00FF),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);
+}
+
+static void _exit_edit(void) { if(s_edit==EDIT_NONE)return; s_edit=EDIT_NONE; _apply_focus(); }
+
+static void _ed_show(void) {
+    lv_ui *u = &guider_ui; char b[8]; int d[4];
+    _digits((s_edit==EDIT_V)?PowerControl::getSetVoltage():PowerControl::getSetCurrent(), d);
+    int bk = !s_blink;
+    char c0 = (s_epos==0&&bk)?'_':('0'+d[0]), c1 = (s_epos==1&&bk)?'_':('0'+d[1]);
+    char c2 = (s_epos==2&&bk)?'_':('0'+d[2]), c3 = (s_epos==3&&bk)?'_':('0'+d[3]);
+    snprintf(b,sizeof(b),"%c%c.%c%c",c0,c1,c2,c3);
+    if(s_edit==EDIT_V && u->screen_label_52) lv_label_set_text(u->screen_label_52, b);
+    if(s_edit==EDIT_I && u->screen_label_54) lv_label_set_text(u->screen_label_54, b);
+}
+
+static void _ed_up(void) {
+    int d[4];
+    if(s_edit==EDIT_V) { _digits(PowerControl::getSetVoltage(),d); d[s_epos]=(d[s_epos]+1)%10; float nv=_value(d); if(nv<=PowerControl::getVMax())PowerControl::setVoltage(nv); }
+    if(s_edit==EDIT_I) { _digits(PowerControl::getSetCurrent(),d); d[s_epos]=(d[s_epos]+1)%10; float nv=_value(d); if(nv<=PowerControl::getIMax())PowerControl::setCurrent(nv); }
+}
+
+static void _ed_dn(void) {
+    int d[4];
+    if(s_edit==EDIT_V) { _digits(PowerControl::getSetVoltage(),d); d[s_epos]=(d[s_epos]+9)%10; float nv=_value(d); if(nv<=PowerControl::getVMax())PowerControl::setVoltage(nv); }
+    if(s_edit==EDIT_I) { _digits(PowerControl::getSetCurrent(),d); d[s_epos]=(d[s_epos]+9)%10; float nv=_value(d); if(nv<=PowerControl::getIMax())PowerControl::setCurrent(nv); }
+}
+
+static void _ed_ok(void) {
+    if(s_epos>=3) { s_edit=EDIT_NONE; _apply_focus(); return; }
+    s_epos++;
 }

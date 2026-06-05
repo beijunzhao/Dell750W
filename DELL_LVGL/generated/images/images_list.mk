@@ -1,0 +1,1 @@
+GEN_CSRCS += _fensghan_RGB565A8_24x23.c _wendyu_RGB565A8_19x21.c
