@@ -751,115 +751,85 @@ void send_response(const char* json)
 
 static void handle_buttons(void)
 {
-    static uint64_t lastBtnTime = 0;
-    static uint64_t okPressStart = 0;   // OK 按键按下起始时间 (长按检测)
+    static uint64_t lastUpTime = 0;
+    static uint64_t lastDownTime = 0;
+    static uint64_t lastOkTime = 0;
+    static uint64_t okPressStart = 0;
     static bool     okWasPressed = false;
-    uint64_t now = esp_timer_get_time() / 1000; // ms
+    static bool     btnOkLast = false;
+    uint64_t now = esp_timer_get_time() / 1000;
 
-    bool btnUp   = (gpio_get_level(BTN_UP)   == 0); // 低电平有效
+    bool btnUp   = (gpio_get_level(BTN_UP)   == 0);
     bool btnDown = (gpio_get_level(BTN_DOWN) == 0);
     bool btnOk   = (gpio_get_level(BTN_OK)   == 0);
 
-    // ===== 校准模式: 按键直接路由到校准模块 =====
+    // 校准模式
     if (calibration_is_active()) {
-        // 校准模式下使用 100ms 去抖 (更快响应)
-        if ((now - lastBtnTime) < 100) return;
+        static uint64_t calLast = 0;
+        if ((now - calLast) < 100) return;
         if (!btnUp && !btnDown && !btnOk) return;
-        lastBtnTime = now;
-
+        calLast = now;
         calibration_handle_button(btnUp, btnDown, btnOk);
         return;
     }
 
-    // ===== 正常模式: 按键路由到 LVGL UI 焦点导航 =====
-    if (lvgl_ui_is_ready()) {
-        // ---- 长按 OK 检测 (2秒): 进入校准模式 ----
+    if (!lvgl_ui_is_ready()) {
+        // 旧版后备处理
         if (btnOk) {
-            if (!okWasPressed) {
-                okWasPressed = true;
-                okPressStart = now;
-            }
+            if (!okWasPressed) { okWasPressed = true; okPressStart = now; }
             if ((now - okPressStart) >= LONG_PRESS_MS) {
-                ESP_LOGI(TAG, "Long press OK detected, entering calibration mode");
-                okWasPressed = false;
-                calibration_start();
-                return;
+                okWasPressed = false; calibration_start(); return;
             }
-        } else {
-            okWasPressed = false;
-        }
-
-        // ---- 短按处理 (150ms 去抖) ----
-        if ((now - lastBtnTime) < 150) return;
+        } else { okWasPressed = false; }
+        if ((now - lastOkTime) < 200) return;
         if (!btnUp && !btnDown && !btnOk) return;
-        lastBtnTime = now;
-
-        if (btnUp) {
-            lvgl_port_lock(0);
-            lvgl_ui_handle_key(LVGL_KEY_UP);
-            lvgl_port_unlock();
-        } else if (btnDown) {
-            lvgl_port_lock(0);
-            lvgl_ui_handle_key(LVGL_KEY_DOWN);
-            lvgl_port_unlock();
-        } else if (btnOk) {
-            lvgl_port_lock(0);
-            lvgl_ui_handle_key(LVGL_KEY_OK);
-            lvgl_port_unlock();
-        }
-
-        // 如果 BLE 已连接, 推送状态更新
-        if (ble_server_is_connected()) {
-            const char* json = build_full_data_json();
-            send_response(json);
-        }
+        lastOkTime = now;
+        if (btnUp) { float v = PowerControl::getSetVoltage() + 0.1f; if(v>PSU_VOLTAGE_MAX)v=PSU_VOLTAGE_MAX; PowerControl::setVoltage(v); }
+        else if (btnDown) { float v = PowerControl::getSetVoltage() - 0.1f; if(v<0)v=0; PowerControl::setVoltage(v); }
+        else if (btnOk) { if(PowerControl::isPoweredOn()) PowerControl::powerOff(); else PowerControl::powerOn(); }
         return;
     }
 
-    // ===== 非 LVGL UI 模式: 旧版按键处理 (后备) =====
-    {
-        // ---- 长按 OK 检测 ----
-        if (btnOk) {
-            if (!okWasPressed) {
-                okWasPressed = true;
-                okPressStart = now;
-            }
-            if ((now - okPressStart) >= LONG_PRESS_MS) {
-                ESP_LOGI(TAG, "Long press OK, entering calibration mode");
-                okWasPressed = false;
-                calibration_start();
-                return;
-            }
-        } else {
+    // ===== LVGL 正常模式 =====
+
+    // 长按 OK 检测 (按下时)
+    if (btnOk) {
+        if (!okWasPressed) { okWasPressed = true; okPressStart = now; }
+        if ((now - okPressStart) >= LONG_PRESS_MS) {
+            okWasPressed = false; okPressStart = 0;
+            calibration_start();
+            return;
+        }
+    }
+
+    // OK 弹起检测 (上升沿)
+    if (!btnOk && btnOkLast) {
+        if (okWasPressed) {
             okWasPressed = false;
-        }
-
-        if ((now - lastBtnTime) < 200) return;
-        if (!btnUp && !btnDown && !btnOk) return;
-        lastBtnTime = now;
-
-        float vSet = PowerControl::getSetVoltage();
-
-        if (btnUp) {
-            vSet += 0.1f;
-            if (vSet > PSU_VOLTAGE_MAX) vSet = PSU_VOLTAGE_MAX;
-            PowerControl::setVoltage(vSet);
-            ESP_LOGI(TAG, "BTN_UP: V_set=%.1fV", vSet);
-        }
-        else if (btnDown) {
-            vSet -= 0.1f;
-            if (vSet < 0.0f) vSet = 0.0f;
-            PowerControl::setVoltage(vSet);
-            ESP_LOGI(TAG, "BTN_DOWN: V_set=%.1fV", vSet);
-        }
-        else if (btnOk) {
-            if (PowerControl::isPoweredOn()) {
-                PowerControl::powerOff();
-                ESP_LOGI(TAG, "BTN_OK: Power OFF");
-            } else {
-                PowerControl::powerOn();
-                ESP_LOGI(TAG, "BTN_OK: Power ON");
+            uint64_t dur = now - okPressStart;
+            okPressStart = 0;
+            if (dur >= 30 && dur < LONG_PRESS_MS) {
+                lvgl_port_lock(0);
+                lvgl_ui_handle_key(LVGL_KEY_OK);
+                lvgl_port_unlock();
             }
         }
+    }
+    btnOkLast = btnOk;
+
+    // UP 键 (200ms 独立去抖)
+    if (btnUp && (now - lastUpTime) >= 200) {
+        lastUpTime = now;
+        lvgl_port_lock(0);
+        lvgl_ui_handle_key(LVGL_KEY_UP);
+        lvgl_port_unlock();
+    }
+
+    // DOWN 键 (200ms 独立去抖)
+    if (btnDown && (now - lastDownTime) >= 200) {
+        lastDownTime = now;
+        lvgl_port_lock(0);
+        lvgl_ui_handle_key(LVGL_KEY_DOWN);
+        lvgl_port_unlock();
     }
 }

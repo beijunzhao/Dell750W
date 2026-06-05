@@ -73,12 +73,11 @@ void init_scr_del_flag(lv_ui *ui)
 {
 
     ui->screen_del = true;
-    ui->screen_1_del = true;
 }
 
 void setup_bottom_layer(void)
 {
-    lv_theme_apply(lv_layer_bottom());
+    // LVGL v9: lv_theme_apply on layer_bottom is not needed
 }
 
 void setup_ui(lv_ui *ui)

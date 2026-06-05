@@ -87,7 +87,7 @@ void setup_scr_screen(lv_ui *ui)
     //Write codes screen_cont_1
     ui->screen_cont_1 = lv_obj_create(ui->screen);
     lv_obj_set_pos(ui->screen_cont_1, 1, 36);
-    lv_obj_set_size(ui->screen_cont_1, 173, 139);
+    lv_obj_set_size(ui->screen_cont_1, 173, 142);
     lv_obj_set_scrollbar_mode(ui->screen_cont_1, LV_SCROLLBAR_MODE_OFF);
 
     //Write style for screen_cont_1, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -586,7 +586,7 @@ void setup_scr_screen(lv_ui *ui)
 
     //Write codes screen_label_53
     ui->screen_label_53 = lv_label_create(ui->screen);
-    lv_obj_set_pos(ui->screen_label_53, 20, 11);
+    lv_obj_set_pos(ui->screen_label_53, 15, 7);
     lv_obj_set_size(ui->screen_label_53, 163, 32);
     lv_label_set_text(ui->screen_label_53, "DELL POWER");
     lv_label_set_long_mode(ui->screen_label_53, LV_LABEL_LONG_WRAP);

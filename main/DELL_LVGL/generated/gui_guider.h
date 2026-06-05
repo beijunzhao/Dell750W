@@ -21,40 +21,17 @@ typedef struct
   
 	lv_obj_t *screen;
 	bool screen_del;
-	lv_obj_t *screen_label_23;
-	lv_obj_t *screen_label_28;
-	lv_obj_t *screen_cont_1;
-	lv_obj_t *screen_label_30;
-	lv_obj_t *screen_label_31;
-	lv_obj_t *screen_label_33;
-	lv_obj_t *screen_label_34;
-	lv_obj_t *screen_label_48;
-	lv_obj_t *screen_label_49;
-	lv_obj_t *screen_btn_1;
-	lv_obj_t *screen_btn_1_label;
-	lv_obj_t *screen_cont_2;
-	lv_obj_t *screen_label_40;
-	lv_obj_t *screen_label_45;
-	lv_obj_t *screen_label_46;
-	lv_obj_t *screen_label_47;
-	lv_obj_t *screen_label_50;
-	lv_obj_t *screen_label_51;
-	lv_obj_t *screen_label_35;
-	lv_obj_t *screen_img_1;
-	lv_obj_t *screen_img_2;
-	lv_obj_t *screen_label_42;
-	lv_obj_t *screen_label_43;
-	lv_obj_t *screen_img_3;
-	lv_obj_t *screen_label_44;
-	lv_obj_t *screen_label_52;
-	lv_obj_t *screen_label_53;
-	lv_obj_t *screen_label_54;
-	lv_obj_t *screen_1;
-	bool screen_1_del;
-	lv_obj_t *screen_1_label_1;
-	lv_obj_t *screen_1_label_2;
-	lv_obj_t *screen_1_label_3;
-	lv_obj_t *screen_1_label_4;
+	lv_obj_t *screen_label_1;
+	lv_obj_t *screen_label_5;
+	lv_obj_t *screen_label_6;
+	lv_obj_t *screen_label_7;
+	lv_obj_t *screen_label_8;
+	lv_obj_t *screen_label_9;
+	lv_obj_t *screen_label_10;
+	lv_obj_t *screen_label_13;
+	lv_obj_t *screen_label_14;
+	lv_obj_t *screen_label_15;
+	lv_obj_t *screen_label_16;
 }lv_ui;
 
 typedef void (*ui_setup_scr_t)(lv_ui * ui);
@@ -83,21 +60,12 @@ extern lv_ui guider_ui;
 
 
 void setup_scr_screen(lv_ui *ui);
-void setup_scr_screen_1(lv_ui *ui);
-LV_IMAGE_DECLARE(_fensghan_RGB565A8_24x23);
-LV_IMAGE_DECLARE(_wendyu_RGB565A8_19x21);
 
-LV_FONT_DECLARE(lv_font_SourceHanSerifSC_Regular_16)
-LV_FONT_DECLARE(lv_font_SourceHanSerifSC_Regular_33)
-LV_FONT_DECLARE(lv_font_SourceHanSerifSC_Regular_36)
-LV_FONT_DECLARE(lv_font_SourceHanSerifSC_Regular_13)
-LV_FONT_DECLARE(lv_font_SourceHanSerifSC_Regular_22)
-LV_FONT_DECLARE(lv_font_SourceHanSerifSC_Regular_15)
-LV_FONT_DECLARE(lv_font_SourceHanSerifSC_Regular_17)
-LV_FONT_DECLARE(lv_font_SourceHanSerifSC_Regular_19)
-LV_FONT_DECLARE(lv_font_SourceHanSerifSC_Regular_25)
-LV_FONT_DECLARE(lv_font_montserratMedium_23)
+LV_FONT_DECLARE(lv_font_SourceHanSerifSC_Regular_31)
+LV_FONT_DECLARE(lv_font_SourceHanSerifSC_Regular_18)
 LV_FONT_DECLARE(lv_font_SourceHanSerifSC_Regular_24)
+LV_FONT_DECLARE(lv_font_SourceHanSerifSC_Regular_36)
+LV_FONT_DECLARE(lv_font_montserratMedium_22)
 
 
 #ifdef __cplusplus
