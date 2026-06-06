@@ -48,11 +48,11 @@
 				</view>
 				<view class="info-row">
 					<text class="info-key">最大输出电流</text>
-					<text class="info-value">62.5A</text>
+					<text class="info-value">{{ currentMax }}A</text>
 				</view>
 				<view class="info-row">
 					<text class="info-key">最大输出功率</text>
-					<text class="info-value">750W</text>
+					<text class="info-value">{{ ratedPower }}W</text>
 				</view>
 			</view>
 		</view>
@@ -122,6 +122,7 @@
 				statusText: '未连接',
 				voltageMax: 12.0,
 				currentMax: 62.5,
+				ratedPower: 750,
 				deviceInfo: {
 					mfr_id: '',
 					mfr_model: '',
@@ -146,12 +147,17 @@
 				this.connected = bleService.connected
 			})
 
-			// 注册数据回调，自动更新设备信息（每4秒推送一次 getInfoJson 或遥测含 MFR 字段）
+			// 注册数据回调，自动更新设备信息和电源规格
 			bleService.onData((data) => {
 				if (data.MFR_ID || data.mfr_id) {
 					bleService._deviceInfo = data
 					this._applyDeviceInfo(data)
 				}
+				// 更新电源规格（来自 ESP32 的 V_max / I_max）
+				if (data.V_max !== undefined) this.voltageMax = data.V_max
+				if (data.I_max !== undefined) this.currentMax = data.I_max
+				// 额定功率 = V_max × I_max
+				this.ratedPower = Math.round(this.voltageMax * this.currentMax)
 			})
 
 			// 同步连接状态

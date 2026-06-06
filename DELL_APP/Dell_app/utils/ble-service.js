@@ -94,11 +94,16 @@ class BleService {
           this._rxCharId = ''
           this._receiveBuffer = ''
           this._lastData = null  // 断开连接时清除缓存数据
+          this._deviceInfo = null  // 断开连接时清除设备信息，页面显示"离线"
           // 更新 Session ID，使旧监听器自动失效（替代不可靠的 off 方法）
           this._currentConnectionSessionId = Date.now()
           // 断开连接时重置累计电能（重新连接后重新开始累积）
           this._resetEnergy()
           this._notifyStatus('已断开')
+          // 断开时触发 onData 回调通知所有页面数据已清空
+          if (this._onDataCallback) {
+            this._onDataCallback({_disconnected: true})
+          }
           // 底层原生断线重连：延迟 3 秒后自动尝试重连上次设备
           setTimeout(() => {
             console.log('[BLE] 断线自动重连：3秒延迟到期，尝试重连')
