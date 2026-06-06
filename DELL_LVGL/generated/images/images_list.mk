@@ -1,1 +1,1 @@
-GEN_CSRCS += _fensghan_RGB565A8_24x23.c _wendyu_RGB565A8_19x21.c
+GEN_CSRCS += _fensghan_RGB565A8_24x23.c _wendyu_RGB565A8_19x21.c _tishi_RGB565A8_14x14.c

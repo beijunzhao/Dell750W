@@ -54,6 +54,21 @@ void lvgl_color_test_init(void);
  */
 void lvgl_reset_debounce(void);
 
+/**
+ * @brief 切换到校准页面（由 calibration.cpp 调用）
+ */
+void lvgl_show_calibration(void);
+
+/**
+ * @brief 切换到电流校准页面
+ */
+void lvgl_show_current_calibration(void);
+
+/**
+ * @brief 隐藏校准页面返回主页面（由 calibration.cpp 调用）
+ */
+void lvgl_hide_calibration(void);
+
 #ifdef __cplusplus
 }
 #endif

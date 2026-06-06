@@ -82,50 +82,6 @@
 			</view>
 		</view>
 
-		<!-- 校准参数 -->
-		<view class="section">
-			<view class="section-header">
-				<text class="section-icon">🔧</text>
-				<text class="section-title">校准参数</text>
-			</view>
-			<view class="info-list">
-				<view class="info-row">
-					<text class="info-key">电压乘数 (V_mult)</text>
-					<text class="info-value">{{ calParams.V_mult.toFixed(4) }}</text>
-				</view>
-				<view class="info-row">
-					<text class="info-key">电压偏置 (V_offset)</text>
-					<text class="info-value">{{ calParams.V_offset.toFixed(4) }}V</text>
-				</view>
-			</view>
-
-			<!-- 电流校准表 -->
-			<view class="sub-section" v-if="iCalPoints.length > 0">
-				<view class="sub-section-header">
-					<text class="sub-section-title">电流校准表 (6 点查表)</text>
-				</view>
-				<view class="cal-table">
-					<view class="cal-table-header">
-						<text class="cal-table-th">点</text>
-						<text class="cal-table-th">目标</text>
-						<text class="cal-table-th">原始电流</text>
-						<text class="cal-table-th">PWM</text>
-					</view>
-					<view v-for="(p, i) in iCalPoints" :key="i" class="cal-table-row">
-						<text class="cal-table-td">{{ i + 1 }}</text>
-						<text class="cal-table-td">{{ p.v.toFixed(1) }}A</text>
-						<text class="cal-table-td">{{ p.r.toFixed(3) }}A</text>
-						<text class="cal-table-td">{{ p.p.toFixed(0) }}</text>
-					</view>
-				</view>
-			</view>
-			<view v-else class="info-list">
-				<view class="info-row">
-					<text class="info-key">电流校准</text>
-					<text class="info-value dim">未校准 (直通)</text>
-				</view>
-			</view>
-		</view>
 
 		<!-- 刷新数据按钮 -->
 		<view class="action-section">
@@ -190,16 +146,11 @@
 				this.connected = bleService.connected
 			})
 
-			// 注册数据回调，实时更新校准参数
+			// 注册数据回调，自动更新设备信息（每4秒推送一次 getInfoJson 或遥测含 MFR 字段）
 			bleService.onData((data) => {
-				if (data.V_mult !== undefined) {
-					this.calParams.V_mult = data.V_mult
-				}
-				if (data.V_offset !== undefined) {
-					this.calParams.V_offset = data.V_offset
-				}
-				if (data.i_cal_points !== undefined) {
-					this.iCalPoints = data.i_cal_points
+				if (data.MFR_ID || data.mfr_id) {
+					bleService._deviceInfo = data
+					this._applyDeviceInfo(data)
 				}
 			})
 

@@ -1,18 +1,8 @@
 /**
- * calibration.h - ADC/PWM 校准状态机与 UI
+ * calibration.h - 6点校准模块（电压ADC + 电流PMBus）
  *
- * 校准流程 (6 步):
- *   1. 用户通过 UP/DOWN 调节 PWM 占空比, 使万用表读数等于目标电压
- *   2. 按 OK 确认, 记录当前 PWM 和 ADC 值
- *   3. 进入下一步, 直到 6 个点全部完成
- *   4. 完成时自动计算校准参数并保存到 NVS
- *
- * 外部接口:
- *   - calibration_start(): 进入校准模式
- *   - calibration_stop():  退出校准模式
- *   - calibration_is_active(): 是否正在校准
- *   - calibration_handle_button(): 按键处理 (UP/DOWN/OK)
- *   - calibration_update_adc(int raw_adc): 更新实时 ADC 读数
+ * 电压校准: V_PWM(LEDC_CH0) + ADC → 6点分段线性插值
+ * 电流校准: I_PWM(LEDC_CH1) + PMBus I_out → 6点查表修正映射
  */
 #ifndef CALIBRATION_H
 #define CALIBRATION_H
@@ -24,75 +14,74 @@
 extern "C" {
 #endif
 
-/* ---- 校准点数量 ---- */
 #define CALIB_POINTS  6
 
-/* ---- 目标电压数组 ---- */
-extern const float g_calib_targets[CALIB_POINTS];
+/* ---- 默认目标值数组（当 getVMax/getIMax 异常时回退） ---- */
+extern const float g_calib_v_targets[CALIB_POINTS];
+extern const float g_calib_i_targets[CALIB_POINTS];
 
-/* ---- 校准数据结构体 ---- */
+/* ---- 6点校准数据结构 ---- */
 typedef struct {
-    float target;   /**< 目标电压 (V) */
-    int   pwm_val;  /**< 确认时的 PWM 占空比 */
-    int   adc_val;  /**< 确认时的原始 ADC 读数 */
-} calib_data_t;
+    float target_v;        /**< 电压目标值 (V) */
+    float target_i;        /**< 电流目标值 (A) */
+    int   adc_raw;         /**< 电压校准时ADC原始读数 */
+    float pmbus_i_raw;     /**< 电流校准时PMBus原始电流值 */
+    int   pwm_val;         /**< 确认时的PWM占空比 */
+} calib_point_t;
+
+/* ---- 校准类型 ---- */
+typedef enum {
+    CALIB_TYPE_VOLTAGE = 0,
+    CALIB_TYPE_CURRENT,
+} calib_type_t;
 
 /* ---- 校准状态 ---- */
 typedef enum {
-    CALIB_STATE_IDLE = 0,       /**< 未在校准模式 */
-    CALIB_STATE_ADJUSTING,      /**< 正在调节 PWM */
-    CALIB_STATE_COMPLETE,       /**< 全部 6 点完成 */
+    CALIB_STATE_IDLE = 0,
+    CALIB_STATE_ADJUSTING,
+    CALIB_STATE_COMPLETE,
 } calib_state_t;
 
-/* ========== API ========== */
+/* ========== 校准状态机 API ========== */
 
-/**
- * @brief 初始化校准模块 (注册 LVGL 样式等)
- */
 void calibration_init(void);
-
-/**
- * @brief 进入校准模式
- * - 创建校准 UI 界面
- * - 将状态机设为 Step 0
- * - 设置 PWM 为当前电压对应的值作为初始值
- */
-void calibration_start(void);
-
-/**
- * @brief 退出校准模式
- * - 销毁校准 UI 界面
- * - 恢复主界面
- */
+void calibration_start_v(void);         /* 电压校准 */
+void calibration_start_i(void);         /* 电流校准 */
 void calibration_stop(void);
-
-/** @brief 是否正在校准中 */
 bool calibration_is_active(void);
+calib_type_t calibration_get_type(void);
 
-/**
- * @brief 按键处理 (由 UI 任务循环调用)
- * @param btn_up    UP 按键按下
- * @param btn_down  DOWN 按键按下
- * @param btn_ok    OK 按键按下
- */
 void calibration_handle_button(bool btn_up, bool btn_down, bool btn_ok);
-
-/**
- * @brief 更新实时 ADC 读数 (由硬件轮询任务调用)
- * @param raw_adc  原始 ADC 读数 (0~4095)
- */
 void calibration_update_adc(int raw_adc);
+void calibration_update_pmbus(float current);
+
+const calib_point_t* calibration_get_data(void);
+int  calibration_get_current_step(void);
+int  calibration_get_pwm(void);
+float calibration_get_pmbus_value(void);
+
+/* ========== 6点插值计算 API ========== */
 
 /**
- * @brief 获取当前校准数据指针
+ * @brief 执行分段线性插值计算（统一API）
+ * @param input         当前的原始输入值 (ADC raw 或 PMBus raw)
+ * @param table         校准点数组
+ * @param num_points    校准点数量 (6)
+ * @param is_voltage    电压(true)用adc_raw，电流(false)用pmbus_i_raw
+ * @return float        计算出的标定值
+ *
+ * 规则:
+ *   - input <= table[0].raw → 返回 0.0
+ *   - 分段线性插值
+ *   - 外推用最后两点斜率
  */
-const calib_data_t* calibration_get_data(void);
+float calculate_calibrated_value(float input, const calib_point_t* table, int num_points, bool is_voltage);
 
-/**
- * @brief 获取当前校准步骤 (0-based, 0~5)
- * @return 当前步骤, 未在校准模式时返回 -1
- */
-int calibration_get_current_step(void);
+/** @brief 6点电压校准插值（兼容桥接，调用 calculate_calibrated_value） */
+float calculate_calibrated_v(int adc_raw, const calib_point_t* points);
+
+/** @brief 6点电流校准插值（兼容桥接，调用 calculate_calibrated_value） */
+float calculate_calibrated_i(float pmbus_raw, const calib_point_t* points);
 
 #ifdef __cplusplus
 }

@@ -294,6 +294,7 @@ void PMBus::_readMFR()
             mfrId[j] = '\0';
         }
     }
+    esp_rom_delay_us(1000);
 
     if (_readByte(PMBUS_MFR_MODEL, &len) == ESP_OK && len > 1) {
         uint8_t data[32] = {};
@@ -305,6 +306,7 @@ void PMBus::_readMFR()
             mfrModel[j] = '\0';
         }
     }
+    esp_rom_delay_us(1000);
 
     if (_readByte(PMBUS_MFR_REVISION, &len) == ESP_OK && len > 1) {
         uint8_t data[16] = {};
@@ -316,6 +318,7 @@ void PMBus::_readMFR()
             mfrRevision[j] = '\0';
         }
     }
+    esp_rom_delay_us(1000);
 
     if (_readByte(PMBUS_MFR_LOCATION, &len) == ESP_OK && len > 1) {
         uint8_t data[32] = {};
@@ -327,6 +330,7 @@ void PMBus::_readMFR()
             mfrLocation[j] = '\0';
         }
     }
+    esp_rom_delay_us(1000);
 
     if (_readByte(PMBUS_MFR_DATE, &len) == ESP_OK && len > 1) {
         uint8_t data[16] = {};
@@ -338,6 +342,7 @@ void PMBus::_readMFR()
             mfrDate[j] = '\0';
         }
     }
+    esp_rom_delay_us(1000);
 
     if (_readByte(PMBUS_MFR_SERIAL, &len) == ESP_OK && len > 1) {
         uint8_t data[32] = {};
@@ -350,8 +355,15 @@ void PMBus::_readMFR()
         }
     }
 
-    _bReadMFR = true;
-    ESP_LOGI(TAG, "MFR: %s %s %s", mfrId, mfrModel, mfrSerial);
+    // 只有至少读取到一个有效字段才标记成功，否则下次 scan() 会重试
+    bool anyValid = (mfrId[0] != '\0') || (mfrModel[0] != '\0') ||
+                    (mfrRevision[0] != '\0') || (mfrSerial[0] != '\0');
+    if (anyValid) {
+        _bReadMFR = true;
+    }
+    ESP_LOGI(TAG, "MFR (%s): %s %s %s",
+             anyValid ? "cached" : "retry_on_next_scan",
+             mfrId, mfrModel, mfrSerial);
 }
 
 float PMBus::_linear11ToFloat(uint16_t data)

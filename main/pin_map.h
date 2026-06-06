@@ -9,8 +9,8 @@
 
 // ---------- 模拟/数字输入 ----------
 #define V_ADC_IO0       GPIO_NUM_0    // 外部 12V 降压采样 (ADC)
-#define BTN_UP          GPIO_NUM_18   // 按键上 (需内部上拉, 低电平有效)
-#define BTN_DOWN        GPIO_NUM_19   // 按键下 (需内部上拉, 低电平有效)
+#define BTN_UP          GPIO_NUM_19   // 按键上 (需内部上拉, 低电平有效)
+#define BTN_DOWN        GPIO_NUM_18   // 按键下 (需内部上拉, 低电平有效)
 #define BTN_OK          GPIO_NUM_20   // 按键确认 (需内部上拉, 低电平有效)
 
 // ---------- 数字输出 ----------
@@ -40,8 +40,8 @@
 #define PWM_DUTY_3V0    1861          // (3.0/3.3)*2047 ≈ 1861 (约90.9%占空比)
 
 // ---------- 电源参数 ----------
-#define PSU_VOLTAGE_MAX       12.0f   // 电源最高输出电压 (硬件上限)
-#define PSU_CURRENT_MAX       62.5f   // 电源最高输出电流 (硬件上限)
+#define PSU_VOLTAGE_MAX       50.0f   // 电源最高输出电压 (硬件上限)
+#define PSU_CURRENT_MAX       100.0f  // 电源最高输出电流 (硬件上限)
 #define PSU_VOLTAGE_MAX_DEF   12.0f   // 默认量程上限 (可被 set_range 动态修改)
 #define PSU_CURRENT_MAX_DEF   62.5f   // 默认量程上限 (可被 set_range 动态修改)
 #define ADC_DIVIDER_RATIO 5.014f      // 分压比: (470+10k+10k+5.1k)/5.1k = 25570/5100

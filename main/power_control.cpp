@@ -67,24 +67,8 @@ void PowerControl::powerOff()
 
 bool PowerControl::isPoweredOn()
 {
-    // 监控模式: 电源一直由硬件控制 (如 PSON/PSKILL 硬线连接),
-    // ESP32 只做监控不控制开关。
-    //
-    // 判断依据:
-    //   1. 如果 PMBus 在线且 V_out > 1V, 认为电源已开启
-    //   2. 如果 PMBus 在线但 V_out <= 1V, 检查 GPIO 状态
-    //      (刚开机时 V_out 可能还未上升到 1V)
-    //   3. 如果 PMBus 离线, 回退到 GPIO 电平判断
-    if (PMBus::isDeviceOnline()) {
-        if (PMBus::V_out >= 1.0f) {
-            return true;
-        }
-        // PMBus 在线但 V_out 低: 可能是刚开机电压还没建立,
-        // 此时以 GPIO 状态为准
-        return gpio_get_level(SW_CTRL) == 1;
-    }
-    // PMBus 离线: 回退到硬件 GPIO 状态
-    return gpio_get_level(SW_CTRL) == 1;
+    /* 使用软件状态变量——powerOn/powerOff 时已同步更新 _powerState，零延迟 */
+    return _powerState;
 }
 
 esp_err_t PowerControl::setVoltage(float voltage)
