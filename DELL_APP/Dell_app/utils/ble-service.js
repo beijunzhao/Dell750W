@@ -83,6 +83,28 @@ class BleService {
     // 全局注册连接状态变化监听（只注册一次，避免 uni.reLaunch 后丢失）
     if (!this._connectionStateChangeRegistered) {
       this._connectionStateChangeRegistered = true
+
+      // 监听蓝牙适配器状态（关闭蓝牙时自动断开）
+      uni.onBluetoothAdapterStateChange((res) => {
+        if (!res.available) {
+          console.warn('[BLE] 蓝牙适配器已关闭，强制断开')
+          this._connected = false
+          this._deviceId = ''
+          this._serviceId = ''
+          this._txCharId = ''
+          this._rxCharId = ''
+          this._receiveBuffer = ''
+          this._lastData = null
+          this._deviceInfo = null
+          this._currentConnectionSessionId = Date.now()
+          this._resetEnergy()
+          this._notifyStatus('蓝牙已关闭')
+          if (this._onDataCallback) {
+            this._onDataCallback({_disconnected: true})
+          }
+        }
+      })
+
       uni.onBLEConnectionStateChange((res) => {
         console.log('[BLE] 连接状态变化:', JSON.stringify(res))
         this._connected = res.connected
