@@ -11,6 +11,7 @@ static const char* TAG = "ADCSampler";
 static const char* NVS_NAMESPACE = "adc_cal";
 static const char* NVS_KEY_MULT   = "cal_mult";
 static const char* NVS_KEY_OFFSET = "cal_off";
+static const char* NVS_KEY_ZERO   = "zero_off";
 
 // 静态成员初始化
 adc_oneshot_unit_handle_t ADCSampler::_adcHandle = nullptr;
@@ -20,6 +21,7 @@ float                    ADCSampler::_calibratedVoltage = 0.0f;
 int                      ADCSampler::_rawAdcValue = 0;
 float                    ADCSampler::_calMultiplier = ADC_CAL_MULTIPLIER;
 float                    ADCSampler::_calOffset = ADC_CAL_OFFSET;
+int                      ADCSampler::_zeroOffset = 0;
 
 // 移动平均滤波缓冲区
 static float _filterBuf[ADC_SAMPLE_COUNT] = {};
@@ -40,18 +42,18 @@ esp_err_t ADCSampler::loadCalFromNVS()
     float mult = _calMultiplier, off = _calOffset;
     size_t sz = sizeof(float);
     ret = nvs_get_blob(handle, NVS_KEY_MULT, &mult, &sz);
-    if (ret == ESP_OK) {
-        _calMultiplier = mult;
-    }
+    if (ret == ESP_OK) { _calMultiplier = mult; }
     sz = sizeof(float);
     ret = nvs_get_blob(handle, NVS_KEY_OFFSET, &off, &sz);
-    if (ret == ESP_OK) {
-        _calOffset = off;
-    }
+    if (ret == ESP_OK) { _calOffset = off; }
+    sz = sizeof(int);
+    int z = _zeroOffset;
+    ret = nvs_get_blob(handle, NVS_KEY_ZERO, &z, &sz);
+    if (ret == ESP_OK) { _zeroOffset = z; }
 
     nvs_close(handle);
-    ESP_LOGI(TAG, "Calibration loaded from NVS: mult=%.4f offset=%.4f",
-             _calMultiplier, _calOffset);
+    ESP_LOGI(TAG, "Calibration loaded: mult=%.4f offset=%.4f zero=%d",
+             _calMultiplier, _calOffset, _zeroOffset);
     return ESP_OK;
 }
 
@@ -73,6 +75,12 @@ esp_err_t ADCSampler::saveCalToNVS()
     ret = nvs_set_blob(handle, NVS_KEY_OFFSET, &_calOffset, sizeof(float));
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "NVS write offset failed");
+        nvs_close(handle);
+        return ret;
+    }
+    ret = nvs_set_blob(handle, NVS_KEY_ZERO, &_zeroOffset, sizeof(int));
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "NVS write zero offset failed");
         nvs_close(handle);
         return ret;
     }
@@ -132,6 +140,21 @@ void ADCSampler::calibrate(float multiplier, float offset)
     ESP_LOGI(TAG, "Calibration updated: mult=%.4f offset=%.4f", multiplier, offset);
 }
 
+void ADCSampler::zeroCalibrate()
+{
+    /* 采样 20 次取平均，记录底噪偏移 */
+    int sum = 0;
+    for (int i = 0; i < 20; i++) {
+        int raw = 0;
+        adc_oneshot_read(_adcHandle, _adcChannel, &raw);
+        sum += raw;
+        esp_rom_delay_us(1000);
+    }
+    _zeroOffset = sum / 20;
+    saveCalToNVS();
+    ESP_LOGI(TAG, "ADC zero calibrated: offset=%d (raw avg=%d)", _zeroOffset, _zeroOffset);
+}
+
 /* ========== 采样 ========== */
 
 float ADCSampler::sample()
@@ -146,8 +169,12 @@ float ADCSampler::sample()
 
     _rawAdcValue = rawAdc;
 
+    /* 减去 ADC 零点偏移（硬钳位：≥ 0） */
+    int correctedAdc = rawAdc - _zeroOffset;
+    if (correctedAdc < 0) correctedAdc = 0;
+
     // 原始电压: ADC → MCU 电压 → 实际电压 (分压还原)
-    float adcVoltage = ((float)rawAdc / 4095.0f) * MCU_VDD;
+    float adcVoltage = ((float)correctedAdc / 4095.0f) * MCU_VDD;
     float realVoltage = adcVoltage * ADC_DIVIDER_RATIO;
 
     // 移动平均滤波

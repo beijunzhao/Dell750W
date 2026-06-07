@@ -48,6 +48,15 @@ public:
     /** 保存校准参数到 NVS */
     static esp_err_t saveCalToNVS();
 
+    /**
+     * @brief ADC 调零：记录当前 ADC 底噪值，后续所有读数自动减去该底噪
+     *        PWM=0 时调用，记录硬件零点偏移
+     */
+    static void zeroCalibrate();
+
+    /** 获取 ADC 零点偏移值 */
+    static int getZeroOffset() { return _zeroOffset; }
+
 private:
     static adc_oneshot_unit_handle_t _adcHandle;
     static adc_channel_t            _adcChannel;
@@ -56,6 +65,7 @@ private:
     static int                      _rawAdcValue;
     static float                    _calMultiplier;
     static float                    _calOffset;
+    static int                      _zeroOffset;  /* ADC 零点偏移 */
 
     /** 移动平均滤波: 加入新值,返回滤波结果 */
     static float _movingAverageFilter(float newValue);

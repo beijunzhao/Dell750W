@@ -15,6 +15,8 @@
 #include "driver/ledc.h"
 #include "driver/gpio.h"
 #include "esp_err.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 
 class PowerControl {
 public:

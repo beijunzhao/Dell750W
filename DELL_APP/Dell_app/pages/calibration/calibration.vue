@@ -188,7 +188,7 @@
 				showRangeDialog: false,
 				rangeVMax: '',
 				// 动态生成的校准点
-				targetVoltages: [0.0, 1.0, 2.5, 5.0, 10.0, 12.0],
+				targetVoltages: [0.0, 3.0, 5.0, 8.0, 10.0, 12.0],
 				calMode: false,
 				calStep: 1,
 				calTarget: 0.0,

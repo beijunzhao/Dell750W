@@ -22,10 +22,10 @@
 
 static const char *TAG = "Calib";
 #define NVS_NS_CALIB   "calib_data"
-#define PWM_STEP  20
+#define PWM_STEP  5
 
-/* ---- 默认目标值（当量程异常时回退） ---- */
-const float g_calib_v_targets[CALIB_POINTS] = {0.0f, 1.0f, 2.5f, 5.0f, 10.0f, 12.0f};
+/* ---- 默认目标值（跳过死区 0.1V~2.4V） ---- */
+const float g_calib_v_targets[CALIB_POINTS] = {0.0f, 3.0f, 5.0f, 8.0f, 10.0f, 12.0f};
 const float g_calib_i_targets[CALIB_POINTS] = {0.0f, 10.0f, 20.0f, 30.0f, 50.0f, 62.5f};
 
 /* ---- 静态变量 ---- */
@@ -72,6 +72,10 @@ static int _calc_init_pwm(float target, bool is_voltage)
 void calibration_start_v(void)
 {
     if (s_state != CALIB_STATE_IDLE) return;
+    if (!PowerControl::isPoweredOn()) {
+        ESP_LOGW(TAG, "Cannot calibrate: power is OFF - please power ON first");
+        return;
+    }
     ESP_LOGI(TAG, "===== Voltage Calibration START =====");
     s_type = CALIB_TYPE_VOLTAGE;
     s_step = 0;
@@ -97,6 +101,10 @@ void calibration_start_v(void)
 void calibration_start_i(void)
 {
     if (s_state != CALIB_STATE_IDLE) return;
+    if (!PowerControl::isPoweredOn()) {
+        ESP_LOGW(TAG, "Cannot calibrate: power is OFF - please power ON first");
+        return;
+    }
     ESP_LOGI(TAG, "===== Current Calibration START =====");
     s_type = CALIB_TYPE_CURRENT;
     s_step = 0;
