@@ -203,7 +203,7 @@ esp_err_t ble_server_send(const char* data)
 
     if (total_len <= CHUNK_SIZE) {
         // 数据小, 直接发送 (末尾加 '\n')
-        char buf[CHUNK_SIZE + 2];
+        char buf[512];  /* 固定缓冲区，避免 VLA */
         memcpy(buf, data, total_len);
         buf[total_len] = '\n';
         size_t buf_len = total_len + 1;
@@ -232,7 +232,7 @@ esp_err_t ble_server_send(const char* data)
             bool is_last = (remaining <= CHUNK_SIZE);
             size_t chunk_size = is_last ? remaining : CHUNK_SIZE;
 
-            char chunk[CHUNK_SIZE + 2];
+            char chunk[512];  /* 固定缓冲区，避免 VLA (MTU 通常 ≤ 512) */
             memcpy(chunk, data + offset, chunk_size);
             size_t chunk_len = chunk_size;
 

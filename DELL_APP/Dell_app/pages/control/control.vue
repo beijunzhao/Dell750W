@@ -242,6 +242,19 @@
 			})
 
 			bleService.onData((data) => {
+				// ★ BLE 断开时清除显示状态，避免保持旧数据不更新
+				if (data._disconnected) {
+					this.powerData = {
+						V_out: 0, I_out: 0, V_in: 0, I_in: 0,
+						W_out: 0, W_in: 0, E_out: 0, E_in: 0,
+						temperature: [0, 0, 0],
+						fan_speed: 0,
+						power_on: 0,
+						device_online: false
+					}
+					this.chartHistory = []
+					return
+				}
 				if (data.V_out !== undefined) {
 					this.powerData = { ...this.powerData, ...data }
 					// 推入曲线历史数据

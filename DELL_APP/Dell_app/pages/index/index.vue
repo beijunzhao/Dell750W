@@ -340,6 +340,15 @@
 			})
 
 			bleService.onData((data) => {
+				// ★ BLE 断开时清除显示状态，避免保持旧数据不更新
+				if (data._disconnected) {
+					this.powerOn = false
+					this.deviceOnline = false
+					this.voltageSet = 0
+					this.currentSet = 0
+					this.powerData = { W_out: 0, W_in: 0, E_out: 0 }
+					return
+				}
 				if (data.power_on !== undefined) {
 					this.powerOn = data.power_on === 1
 				}

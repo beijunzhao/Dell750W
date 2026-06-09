@@ -264,7 +264,7 @@ float ADCSampler::sample()
 float ADCSampler::getVoltage()
 {
     float v = 0.0f;
-    if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) {
+    if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         v = _calibratedVoltage;
         xSemaphoreGive(_mutex);
     }
@@ -274,7 +274,7 @@ float ADCSampler::getVoltage()
 float ADCSampler::getRawVoltage()
 {
     float v = 0.0f;
-    if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) {
+    if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         v = _linearVoltage;
         xSemaphoreGive(_mutex);
     }
@@ -284,7 +284,7 @@ float ADCSampler::getRawVoltage()
 int ADCSampler::getRawAdc()
 {
     int v = 0;
-    if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) {
+    if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         v = _rawAdcValue;
         xSemaphoreGive(_mutex);
     }
@@ -294,7 +294,7 @@ int ADCSampler::getRawAdc()
 int ADCSampler::getZeroOffset()
 {
     int v = 0;
-    if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) {
+    if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         v = _zeroOffset;
         xSemaphoreGive(_mutex);
     }

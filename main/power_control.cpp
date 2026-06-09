@@ -217,12 +217,13 @@ void PowerControl::setVMax(float vMax)
     float newVoltage = 0.0f;
 
     if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE) {
+        float oldV = _voltageSet;
         _vMax = vMax;
         if (_voltageSet > vMax) {
             _voltageSet = vMax;
             newVoltage = vMax;
             needUpdate = true;
-            ESP_LOGI(TAG, "V_set trimmed from %.3f to %.1f", _voltageSet, vMax);
+            ESP_LOGI(TAG, "V_set trimmed from %.3f to %.1f", oldV, vMax);
         }
         xSemaphoreGive(s_mutex);
     }
@@ -246,12 +247,13 @@ void PowerControl::setIMax(float iMax)
     float newCurrent = 0.0f;
 
     if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE) {
+        float oldI = _currentSet;
         _iMax = iMax;
         if (_currentSet > iMax) {
             _currentSet = iMax;
             newCurrent = iMax;
             needUpdate = true;
-            ESP_LOGI(TAG, "I_set trimmed from %.3f to %.1f", _currentSet, iMax);
+            ESP_LOGI(TAG, "I_set trimmed from %.3f to %.1f", oldI, iMax);
         }
         xSemaphoreGive(s_mutex);
     }
@@ -277,28 +279,28 @@ void PowerControl::setPwmDuty(ledc_channel_t channel, uint32_t duty)
 float PowerControl::getSetVoltage()
 {
     float v = 0;
-    if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE) { v = _voltageSet; xSemaphoreGive(s_mutex); }
+    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) { v = _voltageSet; xSemaphoreGive(s_mutex); }
     return v;
 }
 
 float PowerControl::getSetCurrent()
 {
     float v = 0;
-    if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE) { v = _currentSet; xSemaphoreGive(s_mutex); }
+    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) { v = _currentSet; xSemaphoreGive(s_mutex); }
     return v;
 }
 
 float PowerControl::getVMax()
 {
     float v = PSU_VOLTAGE_MAX_DEF;
-    if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE) { v = _vMax; xSemaphoreGive(s_mutex); }
+    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) { v = _vMax; xSemaphoreGive(s_mutex); }
     return v;
 }
 
 float PowerControl::getIMax()
 {
     float v = PSU_CURRENT_MAX_DEF;
-    if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE) { v = _iMax; xSemaphoreGive(s_mutex); }
+    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE) { v = _iMax; xSemaphoreGive(s_mutex); }
     return v;
 }
 

@@ -12,6 +12,8 @@
 #include "pin_map.h"
 #include "driver/i2c_master.h"
 #include "esp_err.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include <stdint.h>
 
 // ---------- PMBus 命令定义 ----------
@@ -144,6 +146,8 @@ private:
     static uint16_t _convertHex2Dec(uint16_t hexData);
     /** 电流校准表 (6 点) */
     static i_calib_point_t _iCalTable[I_CALIB_POINTS];
+    /** 互斥锁：保护所有静态遥测数据成员 */
+    static SemaphoreHandle_t _dataMutex;
 };
 
 #endif // PMBUS_H

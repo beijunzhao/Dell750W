@@ -149,6 +149,12 @@
 
 			// 注册数据回调，自动更新设备信息和电源规格
 			bleService.onData((data) => {
+				// ★ BLE 断开时清除在线状态
+				if (data._disconnected) {
+					this.connected = false
+					this.statusText = '已断开'
+					return
+				}
 				if (data.MFR_ID || data.mfr_id) {
 					bleService._deviceInfo = data
 					this._applyDeviceInfo(data)

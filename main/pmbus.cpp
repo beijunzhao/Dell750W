@@ -34,6 +34,7 @@ static const int I2C_TIMEOUT_MS = 50;
 i2c_master_bus_handle_t PMBus::_busHandle = nullptr;
 i2c_master_dev_handle_t PMBus::_devHandle = nullptr;
 bool PMBus::_bReadMFR = false;
+SemaphoreHandle_t PMBus::_dataMutex = nullptr;
 
 float PMBus::V_in = 0, PMBus::I_in = 0, PMBus::V_out = 0, PMBus::I_out = 0;
 float PMBus::W_in = 0, PMBus::W_out = 0, PMBus::E_in = 0, PMBus::E_out = 0;
@@ -88,6 +89,11 @@ esp_err_t PMBus::init()
 
     ESP_LOGI(TAG, "PMBus I2C initialized (addr=0x%02X, freq=%dHz)", PMBUS_I2C_ADDR, PMBUS_I2C_FREQ);
 
+    // 创建数据互斥锁
+    if (!_dataMutex) {
+        _dataMutex = xSemaphoreCreateMutex();
+    }
+
     // 等待 PSU 稳定 (匹配参考实现 init() 中的 delay(500))
     esp_rom_delay_us(500000); // 500ms
 
@@ -127,6 +133,9 @@ int PMBus::scan()
 
     // 检查设备在线 (使用 transmit_receive, 不使用 probe)
     if (!isDeviceOnline()) return 0;
+
+    // ★ 加锁保护静态数据写入，防止与 BLE 主循环读操作竞争
+    if (_dataMutex) xSemaphoreTake(_dataMutex, pdMS_TO_TICKS(100));
 
     // 首次扫描: 读取厂商信息和 VOUT 格式, 加载电流校准表
     if (!_bReadMFR) {
@@ -180,11 +189,13 @@ int PMBus::scan()
              temperature[0], temperature[1], temperature[2],
              fanSpeed[0]);
 
+    if (_dataMutex) xSemaphoreGive(_dataMutex);
     return 1;
 }
 
 const char* PMBus::getDataJson()
 {
+    if (_dataMutex) xSemaphoreTake(_dataMutex, pdMS_TO_TICKS(50));
     snprintf(_jsonBuf, sizeof(_jsonBuf),
         "{"
         "\"V_out\":%.3f,\"I_out\":%.3f,"
@@ -200,11 +211,13 @@ const char* PMBus::getDataJson()
         temperature[0], temperature[1], temperature[2],
         fanSpeed[0]
     );
+    if (_dataMutex) xSemaphoreGive(_dataMutex);
     return _jsonBuf;
 }
 
 const char* PMBus::getInfoJson()
 {
+    if (_dataMutex) xSemaphoreTake(_dataMutex, pdMS_TO_TICKS(50));
     snprintf(_jsonBuf, sizeof(_jsonBuf),
         "{"
         "\"MFR_ID\":\"%s\",\"MFR_MODEL\":\"%s\","
@@ -216,6 +229,7 @@ const char* PMBus::getInfoJson()
         mfrRevision, mfrLocation,
         mfrDate, mfrSerial
     );
+    if (_dataMutex) xSemaphoreGive(_dataMutex);
     return _jsonBuf;
 }
 
@@ -403,6 +417,7 @@ float PMBus::_readLinear(uint8_t reg)
         return 0.0f;
     }
 
+#if 0  /* E_in/E_out 寄存器格式不匹配 LINEAR11，scan() 中已注释掉读取，此验证逻辑暂不启用 */
     // 2. E_in/E_out (0x86/0x87) 是累计电能, 不会为负且不应跳变
     //    如果读回负值或明显异常值, 保留上次值
     if (reg == PMBUS_READ_EIN || reg == PMBUS_READ_EOUT) {
@@ -422,7 +437,6 @@ float PMBus::_readLinear(uint8_t reg)
         }
 
         // 合理上限检查: 累计电能不应超过 1000 Wh (对于 750W 电源, 满载约 1 小时)
-        // 如果读回值超过此上限, 说明数据异常 (如寄存器格式不匹配或总线错误)
         if (result > 1000.0f) {
             ESP_LOGW(TAG, "_readLinear(0x%02X): E %.1f exceeds max 1000 (raw=0x%04X), keeping last %.1f",
                      reg, result, raw, lastVal);
@@ -430,7 +444,6 @@ float PMBus::_readLinear(uint8_t reg)
         }
 
         // 跳变检测: 累计电能应平滑增长, 单次跳变超过 100 Wh 视为读取错误
-        // E_in/E_out 的单位是 Wh, 正常工作时每秒增长很小
         float delta = fabsf(result - lastVal);
         if (delta > 100.0f) {
             ESP_LOGW(TAG, "_readLinear(0x%02X): E jump %.1f -> %.1f (raw=0x%04X), keeping last %.1f",
@@ -440,6 +453,7 @@ float PMBus::_readLinear(uint8_t reg)
 
         lastVal = result;
     }
+#endif
 
     return result;
 }

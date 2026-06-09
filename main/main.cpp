@@ -245,7 +245,7 @@ static void task_hardware_poll(void *pvParameters)
         /* 注意：PMBus::scan() 会将结果写入静态成员（如 PMBus::I_out）。
          * 如果 build_full_data_json() 被 BLE 主循环调用且同时本任务也在写，
          * 可能发生数据撕裂。建议后续在 PMBus 类内部使用互斥锁保护所有静态数据。 */
-        vTaskDelay(pdMS_TO_TICKS(50));  /* 50ms 周期，ADC/PMBus 刷新率 20Hz */
+        vTaskDelay(pdMS_TO_TICKS(100));  /* 100ms 周期，匹配 PMBus::scan() 10Hz 上限 */
     }
 }
 
