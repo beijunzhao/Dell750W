@@ -1,10 +1,12 @@
 /**
  * adc_sampler.cpp - ADCSampler 类实现
  *
- * 采样链路: 4x过采样 → 3点移动平均 → 6点插值校准
- * 原始ADC值直接传入校准函数。
+ * 采样链路: 4x过采样 → 3点移动平均 → 6点插值校准 → EMA 平滑 → 死区滞回
+ * 原始ADC值直接传入校准函数，不预先减零点偏移（校准表本身覆盖零点）。
  *
- * 线程安全：所有共享变量受 _mutex 保护，sample() 整流程持锁（portMAX_DELAY）。
+ * 线程安全：所有共享变量受 _mutex 保护，
+ * sample() 整个流程（过采样→滤波→校准→死区→写变量）都在锁内执行。
+ * getter 函数和 zeroCalibrate() 同样持锁。
  */
 #include "adc_sampler.h"
 #include "calibration.h"
@@ -17,25 +19,26 @@ static const char* TAG = "ADCSampler";
 static const char* NVS_NS  = "adc_cal";
 static const char* NVS_KEY = "zero_off";
 
-/* 死区迟滞阈值（V） */
+/* 死区迟滞阈值 */
 #define DEADZONE_ENTER  0.03f
 #define DEADZONE_EXIT   0.07f
 
 /* ========== 静态成员初始化 ========== */
 adc_oneshot_unit_handle_t ADCSampler::_adcHandle = nullptr;
 adc_channel_t            ADCSampler::_adcChannel = ADC_CHANNEL_0;
-float                    ADCSampler::_linearVoltage = 0.0f;
-float                    ADCSampler::_calibratedVoltage = 0.0f;
-int                      ADCSampler::_rawAdcValue = 0;
-int                      ADCSampler::_zeroOffset = 0;
-bool                     ADCSampler::_initialized = false;
-SemaphoreHandle_t        ADCSampler::_mutex = nullptr;
-bool                     ADCSampler::_inDeadZone = false;
-float                    ADCSampler::_filterBuf[MA_WINDOW] = {};
-int                      ADCSampler::_filterIdx = 0;
-bool                     ADCSampler::_filterFilled = false;
-float                    ADCSampler::_emaCalVoltage = 0.0f;
-bool                     ADCSampler::_emaInited = false;
+adc_cali_handle_t        ADCSampler::_caliHandle = nullptr;
+float ADCSampler::_linearVoltage = 0.0f;
+float ADCSampler::_calibratedVoltage = 0.0f;
+int   ADCSampler::_rawAdcValue = 0;
+int   ADCSampler::_zeroOffset = 0;
+bool  ADCSampler::_initialized = false;
+SemaphoreHandle_t ADCSampler::_mutex = nullptr;
+bool  ADCSampler::_inDeadZone = false;
+float ADCSampler::_emaCalVoltage = 0.0f;
+bool  ADCSampler::_emaInited = false;
+float ADCSampler::_filterBuf[ADCSampler::MA_WINDOW] = {};
+int   ADCSampler::_filterIdx = 0;
+bool  ADCSampler::_filterFilled = false;
 
 /* ========== NVS 持久化 ========== */
 
@@ -108,11 +111,25 @@ esp_err_t ADCSampler::init()
     ret = adc_oneshot_config_channel(_adcHandle, _adcChannel, &chanCfg);
     if (ret != ESP_OK) { ESP_LOGE(TAG, "ADC channel config failed"); return ret; }
 
-    /* 清空滤波缓冲区 */
+    /* 创建硬件校准句柄 */
+    adc_cali_curve_fitting_config_t caliCfg = {};
+    caliCfg.unit_id  = ADC_UNIT_1;
+    caliCfg.atten    = ADC_ATTEN_DB_12;
+    caliCfg.bitwidth = ADC_BITWIDTH_DEFAULT;
+    ret = adc_cali_create_scheme_curve_fitting(&caliCfg, &_caliHandle);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "ADC hw calibration scheme not available, fallback to linear");
+        _caliHandle = nullptr;
+    } else {
+        ESP_LOGI(TAG, "ADC hardware calibration enabled");
+    }
+
+    /* 滤波缓冲区初始化 */
     _filterIdx = 0;
     _filterFilled = false;
     for (int i = 0; i < MA_WINDOW; i++) _filterBuf[i] = 0.0f;
     _inDeadZone = false;
+    _emaInited = false;
 
     /* 加载零点偏移 */
     _zeroOffset = 0;
@@ -128,7 +145,8 @@ esp_err_t ADCSampler::init()
     }
 
     _initialized = true;
-    ESP_LOGI(TAG, "ADC initialized (4xOS+%d-MA+6pt, mutex=portMAX)", MA_WINDOW);
+    ESP_LOGI(TAG, "ADC initialized (4xOS+%d-MA+EMA+6pt cal, hw cal %s)",
+             MA_WINDOW, _caliHandle ? "ON" : "OFF");
     return ESP_OK;
 }
 
@@ -181,17 +199,20 @@ float ADCSampler::sample()
     /* ② 3点移动平均平滑 */
     float smoothedAdc = _movingAverageFilter((float)rawAdc);
 
-    /* ③ 6点插值校准（直接输入原始ADC值） */
+    /* ③ 原始ADC直接传入6点插值校准 */
     float calV = calculate_calibrated_value(smoothedAdc, true);
 
-    /* ④ 带迟滞的死区处理（同步 EMA 状态） */
+    /* ④ EMA 平滑 + 死区处理 */
+    /* 先处理死区状态切换 */
     if (_inDeadZone) {
         if (calV >= DEADZONE_EXIT) {
             _inDeadZone = false;
-            _emaCalVoltage = calV;   /* 立即恢复，无延迟 */
+            // 退出死区时重置 EMA 为当前值，快速恢复
+            _emaCalVoltage = calV;
+            _emaInited = true;
         } else {
             calV = 0.0f;
-            _emaCalVoltage = 0.0f;   /* 保持归零 */
+            _emaCalVoltage = 0.0f;  // 保持在零
         }
     } else {
         if (calV < DEADZONE_ENTER) {
@@ -201,7 +222,7 @@ float ADCSampler::sample()
         }
     }
 
-    /* ⑤ EMA 平滑校准电压，消除末位跳动 */
+    /* 正常区域进行 EMA 平滑 */
     if (!_inDeadZone && calV > 0.0f) {
         if (!_emaInited) {
             _emaCalVoltage = calV;
@@ -209,18 +230,36 @@ float ADCSampler::sample()
         } else {
             _emaCalVoltage = EMA_ALPHA * calV + (1.0f - EMA_ALPHA) * _emaCalVoltage;
         }
+    } else if (_inDeadZone) {
+        _emaCalVoltage = 0.0f;
+        _emaInited = false;  // 下次退出死区重新初始化
     }
-    _calibratedVoltage = _emaCalVoltage;
 
-    /* ⑥ 更新其余共享变量 */
+    /* ⑤ 更新共享变量 */
     _rawAdcValue = rawAdc;
-    _linearVoltage = (smoothedAdc / 4095.0f) * MCU_VDD * ADC_DIVIDER_RATIO;
+    _calibratedVoltage = _emaCalVoltage;   // 使用 EMA 平滑后的值
+
+    /* ⑥ 计算调试线性电压（启用硬件校准） */
+    float linear = 0.0f;
+    if (_caliHandle) {
+        int voltage_mV = 0;
+        esp_err_t calRet = adc_cali_raw_to_voltage(_caliHandle, rawAdc, &voltage_mV);
+        if (calRet == ESP_OK) {
+            linear = voltage_mV / 1000.0f * ADC_DIVIDER_RATIO;
+        } else {
+            // 硬件校准失败，回退到简单线性公式
+            linear = (rawAdc / 4095.0f) * MCU_VDD * ADC_DIVIDER_RATIO;
+        }
+    } else {
+        linear = (rawAdc / 4095.0f) * MCU_VDD * ADC_DIVIDER_RATIO;
+    }
+    _linearVoltage = linear;
 
     xSemaphoreGive(_mutex);
-    return calV;
+    return _calibratedVoltage;
 }
 
-/* ========== getter（全部持锁） ========== */
+/* ========== getter（全部持锁 + 移入 .cpp） ========== */
 
 float ADCSampler::getVoltage()
 {
@@ -267,10 +306,10 @@ int ADCSampler::getZeroOffset()
 float ADCSampler::_movingAverageFilter(float newValue)
 {
     _filterBuf[_filterIdx] = newValue;
-    _filterIdx = (_filterIdx + 1) % MA_WINDOW;
+    _filterIdx = (_filterIdx + 1) % ADCSampler::MA_WINDOW;
     if (_filterIdx == 0) _filterFilled = true;
 
-    int count = _filterFilled ? MA_WINDOW : _filterIdx;
+    int count = _filterFilled ? ADCSampler::MA_WINDOW : _filterIdx;
     if (count == 0) count = 1;
 
     float s = 0.0f;

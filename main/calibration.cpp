@@ -25,7 +25,7 @@
 
 static const char *TAG = "Calib";
 #define NVS_NS "calib_data"
-#define PWM_STEP  5
+#define PWM_STEP  2
 
 /* 默认校准目标值 */
 const float g_calib_v_targets[CALIB_POINTS] = {0.0f, 3.0f, 5.0f, 8.0f, 10.0f, 12.0f};

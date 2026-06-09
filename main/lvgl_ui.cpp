@@ -48,15 +48,19 @@ static edit_t s_edit=EDIT_NONE;
 static int s_epos=0;
 static bool s_blink=true;
 
-/* 编辑期间暂存的上限值 */
-static float s_edit_vmax=0.0f;
-static float s_edit_imax=0.0f;
+/* 编辑期间暂存的值 */
+static float s_edit_v=0.0f;      /* V_set 编辑暂存 */
+static float s_edit_i=0.0f;      /* I_set 编辑暂存 */
+static float s_edit_vmax=0.0f;   /* V_max 编辑暂存 */
+static float s_edit_imax=0.0f;   /* I_max 编辑暂存 */
 
 static void _switch_to_page(page_t page);
 static void _apply_focus(void),_clear_focus(void);
 static void _apply_range_focus(void);
 static void _apply_menu_cursor(void);
-static void _enter_edit(edit_t mode),_exit_edit(void);
+static void _enter_edit(edit_t mode);
+static void _exit_edit(void);
+static void _apply_edit(void);    /* 双击确认退出时生效 */
 static void _ed_up(void),_ed_dn(void),_ed_ok(void),_ed_show(void);
 static void _digits(float v,int d[4]);
 static float _value(const int d[4]);
@@ -325,15 +329,27 @@ static const char* _parse_mfr_name(const char* id){
 static void _digits(float v,int d[4]){int ip=(int)v;if(ip<0)ip=0;if(ip>99)ip=99;int fp=(int)((v-ip)*100+0.5f);if(fp>=100){ip++;fp=0;}if(fp<0)fp=0;d[0]=ip/10;d[1]=ip%10;d[2]=fp/10;d[3]=fp%10;}
 static float _value(const int d[4]){return(float)(d[0]*10+d[1])+(float)(d[2]*10+d[3])/100.0f;}
 static void _enter_edit(edit_t mode){s_edit=mode;s_epos=0;s_blink=true;lv_ui*u=&guider_ui;
-    if(mode==EDIT_V&&u->shouye_label_23){lv_obj_set_style_border_width(u->shouye_label_23,3,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);lv_obj_set_style_border_color(u->shouye_label_23,lv_color_hex(0xFF00FF),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);lv_obj_set_style_border_opa(u->shouye_label_23,255,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);lv_obj_set_style_bg_color(u->shouye_label_23,lv_color_hex(0x331144),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);}
-    if(mode==EDIT_V&&u->shouye_label_52)lv_obj_set_style_text_color(u->shouye_label_52,lv_color_hex(0xFF00FF),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);
-    if(mode==EDIT_I&&u->shouye_label_28){lv_obj_set_style_border_width(u->shouye_label_28,3,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);lv_obj_set_style_border_color(u->shouye_label_28,lv_color_hex(0xFF00FF),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);lv_obj_set_style_border_opa(u->shouye_label_28,255,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);lv_obj_set_style_bg_color(u->shouye_label_28,lv_color_hex(0x331144),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);}
-    if(mode==EDIT_I&&u->shouye_label_54)lv_obj_set_style_text_color(u->shouye_label_54,lv_color_hex(0xFF00FF),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);
+    if(mode==EDIT_V){
+        s_edit_v=PowerControl::getSetVoltage();
+        if(u->shouye_label_23){lv_obj_set_style_border_width(u->shouye_label_23,3,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);lv_obj_set_style_border_color(u->shouye_label_23,lv_color_hex(0xFF00FF),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);lv_obj_set_style_border_opa(u->shouye_label_23,255,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);lv_obj_set_style_bg_color(u->shouye_label_23,lv_color_hex(0x331144),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);}
+        if(u->shouye_label_52)lv_obj_set_style_text_color(u->shouye_label_52,lv_color_hex(0xFF00FF),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);
+    }
+    if(mode==EDIT_I){
+        s_edit_i=PowerControl::getSetCurrent();
+        if(u->shouye_label_28){lv_obj_set_style_border_width(u->shouye_label_28,3,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);lv_obj_set_style_border_color(u->shouye_label_28,lv_color_hex(0xFF00FF),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);lv_obj_set_style_border_opa(u->shouye_label_28,255,(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);lv_obj_set_style_bg_color(u->shouye_label_28,lv_color_hex(0x331144),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);}
+        if(u->shouye_label_54)lv_obj_set_style_text_color(u->shouye_label_54,lv_color_hex(0xFF00FF),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);
+    }
     if(mode==EDIT_RANGE_V){s_edit_vmax=PowerControl::getVMax();if(u->shangxianshezhi_label_2){lv_obj_set_style_border_color(u->shangxianshezhi_label_2,lv_color_hex(0xFF00FF),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);lv_obj_set_style_bg_color(u->shangxianshezhi_label_2,lv_color_hex(0x331144),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);}}
     if(mode==EDIT_RANGE_I){s_edit_imax=PowerControl::getIMax();if(u->shangxianshezhi_label_6){lv_obj_set_style_border_color(u->shangxianshezhi_label_6,lv_color_hex(0xFF00FF),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);lv_obj_set_style_bg_color(u->shangxianshezhi_label_6,lv_color_hex(0x331144),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);}}
 }
 #define RATED_W 750.0f  /* Dell DPS-750AB 额定功率 */
+static void _apply_edit(void){
+    if(s_edit==EDIT_V){if(s_edit_v<=PowerControl::getVMax())PowerControl::setVoltage(s_edit_v);}
+    if(s_edit==EDIT_I){if(s_edit_i<=PowerControl::getIMax())PowerControl::setCurrent(s_edit_i);}
+}
 static void _exit_edit(void){if(s_edit==EDIT_NONE)return;
+    /* 双击退出时先生效 */
+    if(s_edit==EDIT_V||s_edit==EDIT_I)_apply_edit();
     if(s_edit==EDIT_RANGE_V){
         PowerControl::setVMax(s_edit_vmax);
         float new_vm=PowerControl::getVMax();
@@ -353,23 +369,30 @@ static void _exit_edit(void){if(s_edit==EDIT_NONE)return;
     else if(s_page==PAGE_RANGE)_apply_range_focus();
 }
 static void _ed_show(void){lv_ui*u=&guider_ui;char b[8];int d[4];
-    float val=(s_edit==EDIT_V)?PowerControl::getSetVoltage():(s_edit==EDIT_I)?PowerControl::getSetCurrent():(s_edit==EDIT_RANGE_V)?s_edit_vmax:s_edit_imax;
+    float val=(s_edit==EDIT_V)?s_edit_v:(s_edit==EDIT_I)?s_edit_i:(s_edit==EDIT_RANGE_V)?s_edit_vmax:s_edit_imax;
     _digits(val,d);int bk=!s_blink;char c0=(s_epos==0&&bk)?'_':('0'+d[0]),c1=(s_epos==1&&bk)?'_':('0'+d[1]),c2=(s_epos==2&&bk)?'_':('0'+d[2]),c3=(s_epos==3&&bk)?'_':('0'+d[3]);snprintf(b,sizeof(b),"%c%c.%c%c",c0,c1,c2,c3);
     if(s_edit==EDIT_V&&u->shouye_label_52)lv_label_set_text(u->shouye_label_52,b);
     if(s_edit==EDIT_I&&u->shouye_label_54)lv_label_set_text(u->shouye_label_54,b);
     if(s_edit==EDIT_RANGE_V&&u->shangxianshezhi_label_2)lv_label_set_text(u->shangxianshezhi_label_2,b);
     if(s_edit==EDIT_RANGE_I&&u->shangxianshezhi_label_6)lv_label_set_text(u->shangxianshezhi_label_6,b);
 }
+/* UP/DOWN 修改暂存值，不立即生效 */
 static void _ed_up(void){int d[4];
-    if(s_edit==EDIT_V){_digits(PowerControl::getSetVoltage(),d);d[s_epos]=(d[s_epos]+1)%10;float nv=_value(d);if(nv<=PowerControl::getVMax())PowerControl::setVoltage(nv);}
-    if(s_edit==EDIT_I){_digits(PowerControl::getSetCurrent(),d);d[s_epos]=(d[s_epos]+1)%10;float nv=_value(d);if(nv<=PowerControl::getIMax())PowerControl::setCurrent(nv);}
+    if(s_edit==EDIT_V){_digits(s_edit_v,d);d[s_epos]=(d[s_epos]+1)%10;s_edit_v=_value(d);}
+    if(s_edit==EDIT_I){_digits(s_edit_i,d);d[s_epos]=(d[s_epos]+1)%10;s_edit_i=_value(d);}
     if(s_edit==EDIT_RANGE_V){_digits(s_edit_vmax,d);d[s_epos]=(d[s_epos]+1)%10;s_edit_vmax=_value(d);}
     if(s_edit==EDIT_RANGE_I){_digits(s_edit_imax,d);d[s_epos]=(d[s_epos]+1)%10;s_edit_imax=_value(d);}
 }
 static void _ed_dn(void){int d[4];
-    if(s_edit==EDIT_V){_digits(PowerControl::getSetVoltage(),d);d[s_epos]=(d[s_epos]+9)%10;float nv=_value(d);if(nv<=PowerControl::getVMax())PowerControl::setVoltage(nv);}
-    if(s_edit==EDIT_I){_digits(PowerControl::getSetCurrent(),d);d[s_epos]=(d[s_epos]+9)%10;float nv=_value(d);if(nv<=PowerControl::getIMax())PowerControl::setCurrent(nv);}
+    if(s_edit==EDIT_V){_digits(s_edit_v,d);d[s_epos]=(d[s_epos]+9)%10;s_edit_v=_value(d);}
+    if(s_edit==EDIT_I){_digits(s_edit_i,d);d[s_epos]=(d[s_epos]+9)%10;s_edit_i=_value(d);}
     if(s_edit==EDIT_RANGE_V){_digits(s_edit_vmax,d);d[s_epos]=(d[s_epos]+9)%10;s_edit_vmax=_value(d);}
     if(s_edit==EDIT_RANGE_I){_digits(s_edit_imax,d);d[s_epos]=(d[s_epos]+9)%10;s_edit_imax=_value(d);}
 }
-static void _ed_ok(void){uint32_t now_ms=(uint32_t)(esp_timer_get_time()/1000ULL);if(s_last_ok_ms!=0&&(now_ms-s_last_ok_ms)<DOUBLE_CLICK_MS){s_last_ok_ms=0;_exit_edit();return;}s_last_ok_ms=now_ms;if(s_epos>=3)return;s_epos++;}
+static void _ed_ok(void){
+    uint32_t now_ms=(uint32_t)(esp_timer_get_time()/1000ULL);
+    if(s_last_ok_ms!=0&&(now_ms-s_last_ok_ms)<DOUBLE_CLICK_MS){s_last_ok_ms=0;_exit_edit();return;}
+    s_last_ok_ms=now_ms;
+    /* 循环: 到最后一位继续按确认返回第一位 */
+    s_epos=(s_epos+1)%4;
+}
