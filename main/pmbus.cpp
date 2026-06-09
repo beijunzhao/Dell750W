@@ -119,10 +119,10 @@ bool PMBus::isDeviceOnline()
 
 int PMBus::scan()
 {
-    // 1 秒间隔限制, 匹配参考实现
+    // 100ms (10Hz) 刷新率以匹配 UI 流畅度
     static uint64_t lastScan = 0;
     uint64_t now = esp_timer_get_time() / 1000; // ms
-    if ((now - lastScan) < 1000) return 0;
+    if ((now - lastScan) < 100) return 0;
     lastScan = now;
 
     // 检查设备在线 (使用 transmit_receive, 不使用 probe)

@@ -114,7 +114,7 @@ void lvgl_ui_init(void){
             if(u->dianyajiaozhun_label_13){int pwm=calibration_get_pwm();snprintf(b,sizeof(b),"%d",pwm);lv_label_set_text(u->dianyajiaozhun_label_13,b);}
             const calib_point_t*data=calibration_get_data();
             lv_obj_t*dots[6]={u->dianyajiaozhun_label_15,u->dianyajiaozhun_label_16,u->dianyajiaozhun_label_17,u->dianyajiaozhun_label_18,u->dianyajiaozhun_label_19,u->dianyajiaozhun_label_20};
-            for(int i=0;i<6;i++)if(dots[i]){if(data[i].adc_raw!=0)lv_obj_set_style_bg_color(dots[i],lv_color_hex(0x0dff00),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);else if(i==step)lv_obj_set_style_bg_color(dots[i],lv_color_hex(0xFF9100),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);else lv_obj_set_style_bg_color(dots[i],lv_color_hex(0x555555),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);}
+            for(int i=0;i<6;i++)if(dots[i]){if(data[i].pwm_val>0||(i==0&&data[i].pwm_val==0))lv_obj_set_style_bg_color(dots[i],lv_color_hex(0x0dff00),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);else if(i==step)lv_obj_set_style_bg_color(dots[i],lv_color_hex(0xFF9100),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);else lv_obj_set_style_bg_color(dots[i],lv_color_hex(0x555555),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);}
         }
         else if(s_page==PAGE_RANGE){
             if(s_edit!=EDIT_RANGE_V&&s_edit!=EDIT_RANGE_I){
@@ -136,7 +136,7 @@ void lvgl_ui_init(void){
             if(u->dianliujiaozhun_label_27){int pwm=calibration_get_pwm();snprintf(b,sizeof(b),"%d",pwm);lv_label_set_text(u->dianliujiaozhun_label_27,b);}
             lv_obj_t*idots[6]={u->dianliujiaozhun_label_15,u->dianliujiaozhun_label_16,u->dianliujiaozhun_label_17,u->dianliujiaozhun_label_18,u->dianliujiaozhun_label_19,u->dianliujiaozhun_label_20};
             const calib_point_t*idata=calibration_get_data();
-            for(int i=0;i<6;i++)if(idots[i]){if(idata[i].pmbus_i_raw>0.0f)lv_obj_set_style_bg_color(idots[i],lv_color_hex(0x0dff00),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);else if(i==step)lv_obj_set_style_bg_color(idots[i],lv_color_hex(0xFF9100),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);else lv_obj_set_style_bg_color(idots[i],lv_color_hex(0x555555),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);}
+            for(int i=0;i<6;i++)if(idots[i]){if(idata[i].pwm_val>0||(i==0&&idata[i].pwm_val==0))lv_obj_set_style_bg_color(idots[i],lv_color_hex(0x0dff00),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);else if(i==step)lv_obj_set_style_bg_color(idots[i],lv_color_hex(0xFF9100),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);else lv_obj_set_style_bg_color(idots[i],lv_color_hex(0x555555),(uint32_t)LV_PART_MAIN|(uint32_t)LV_STATE_DEFAULT);}
         }
         else if(s_page==PAGE_INFO&&!s_info_loaded){
             s_info_loaded=true;

@@ -1,214 +1,279 @@
 /**
  * adc_sampler.cpp - ADCSampler 类实现
+ *
+ * 采样链路: 4x过采样 → 3点移动平均 → 6点插值校准
+ * 原始ADC值直接传入校准函数。
+ *
+ * 线程安全：所有共享变量受 _mutex 保护，sample() 整流程持锁（portMAX_DELAY）。
  */
 #include "adc_sampler.h"
+#include "calibration.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include <cstring>
 
 static const char* TAG = "ADCSampler";
-static const char* NVS_NAMESPACE = "adc_cal";
-static const char* NVS_KEY_MULT   = "cal_mult";
-static const char* NVS_KEY_OFFSET = "cal_off";
-static const char* NVS_KEY_ZERO   = "zero_off";
+static const char* NVS_NS  = "adc_cal";
+static const char* NVS_KEY = "zero_off";
 
-// 静态成员初始化
+/* 死区迟滞阈值（V） */
+#define DEADZONE_ENTER  0.03f
+#define DEADZONE_EXIT   0.07f
+
+/* ========== 静态成员初始化 ========== */
 adc_oneshot_unit_handle_t ADCSampler::_adcHandle = nullptr;
 adc_channel_t            ADCSampler::_adcChannel = ADC_CHANNEL_0;
-float                    ADCSampler::_filteredVoltage = 0.0f;
+float                    ADCSampler::_linearVoltage = 0.0f;
 float                    ADCSampler::_calibratedVoltage = 0.0f;
 int                      ADCSampler::_rawAdcValue = 0;
-float                    ADCSampler::_calMultiplier = ADC_CAL_MULTIPLIER;
-float                    ADCSampler::_calOffset = ADC_CAL_OFFSET;
 int                      ADCSampler::_zeroOffset = 0;
-
-// 移动平均滤波缓冲区
-static float _filterBuf[ADC_SAMPLE_COUNT] = {};
-static int   _filterIdx = 0;
-static bool  _filterFilled = false;
+bool                     ADCSampler::_initialized = false;
+SemaphoreHandle_t        ADCSampler::_mutex = nullptr;
+bool                     ADCSampler::_inDeadZone = false;
+float                    ADCSampler::_filterBuf[MA_WINDOW] = {};
+int                      ADCSampler::_filterIdx = 0;
+bool                     ADCSampler::_filterFilled = false;
+float                    ADCSampler::_emaCalVoltage = 0.0f;
+bool                     ADCSampler::_emaInited = false;
 
 /* ========== NVS 持久化 ========== */
 
 esp_err_t ADCSampler::loadCalFromNVS()
 {
-    nvs_handle_t handle;
-    esp_err_t ret = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
+    int offset = 0;
+    nvs_handle_t h;
+    esp_err_t ret = nvs_open(NVS_NS, NVS_READONLY, &h);
     if (ret != ESP_OK) {
-        ESP_LOGI(TAG, "No NVS calibration found, using defaults");
-        return ret;
+        ESP_LOGW(TAG, "NVS open failed (%d), zeroOffset=0", ret);
+    } else {
+        size_t sz = sizeof(int);
+        ret = nvs_get_blob(h, NVS_KEY, &offset, &sz);
+        nvs_close(h);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "No zero cal in NVS, set to 0. Run zeroCalibrate()");
+            offset = 0;
+        } else {
+            ESP_LOGI(TAG, "Zero offset loaded: %d", offset);
+        }
     }
 
-    float mult = _calMultiplier, off = _calOffset;
-    size_t sz = sizeof(float);
-    ret = nvs_get_blob(handle, NVS_KEY_MULT, &mult, &sz);
-    if (ret == ESP_OK) { _calMultiplier = mult; }
-    sz = sizeof(float);
-    ret = nvs_get_blob(handle, NVS_KEY_OFFSET, &off, &sz);
-    if (ret == ESP_OK) { _calOffset = off; }
-    sz = sizeof(int);
-    int z = _zeroOffset;
-    ret = nvs_get_blob(handle, NVS_KEY_ZERO, &z, &sz);
-    if (ret == ESP_OK) { _zeroOffset = z; }
-
-    nvs_close(handle);
-    ESP_LOGI(TAG, "Calibration loaded: mult=%.4f offset=%.4f zero=%d",
-             _calMultiplier, _calOffset, _zeroOffset);
+    if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) {
+        _zeroOffset = offset;
+        xSemaphoreGive(_mutex);
+    }
     return ESP_OK;
 }
 
 esp_err_t ADCSampler::saveCalToNVS()
 {
-    nvs_handle_t handle;
-    esp_err_t ret = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "NVS open failed: %s", esp_err_to_name(ret));
-        return ret;
+    int offset;
+    if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) {
+        offset = _zeroOffset;
+        xSemaphoreGive(_mutex);
+    } else {
+        offset = 0;
     }
 
-    ret = nvs_set_blob(handle, NVS_KEY_MULT, &_calMultiplier, sizeof(float));
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "NVS write mult failed");
-        nvs_close(handle);
-        return ret;
-    }
-    ret = nvs_set_blob(handle, NVS_KEY_OFFSET, &_calOffset, sizeof(float));
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "NVS write offset failed");
-        nvs_close(handle);
-        return ret;
-    }
-    ret = nvs_set_blob(handle, NVS_KEY_ZERO, &_zeroOffset, sizeof(int));
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "NVS write zero offset failed");
-        nvs_close(handle);
-        return ret;
-    }
-    ret = nvs_commit(handle);
-    nvs_close(handle);
-
-    if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "Calibration saved to NVS: mult=%.4f offset=%.4f",
-                 _calMultiplier, _calOffset);
-    }
-    return ret;
+    nvs_handle_t h;
+    esp_err_t ret = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    if (ret != ESP_OK) return ret;
+    nvs_set_blob(h, NVS_KEY, &offset, sizeof(int));
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "Zero offset saved: %d", offset);
+    return ESP_OK;
 }
 
-/* ========== 初始化和校准 ========== */
+/* ========== 初始化 ========== */
 
 esp_err_t ADCSampler::init()
 {
-    adc_oneshot_unit_init_cfg_t unitCfg = {};
-    unitCfg.unit_id  = ADC_UNIT_1;
-
-    esp_err_t ret = adc_oneshot_new_unit(&unitCfg, &_adcHandle);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "ADC oneshot unit init failed: %d", ret);
-        return ret;
+    if (_initialized) {
+        ESP_LOGW(TAG, "Already initialized, skipping");
+        return ESP_OK;
     }
+
+    _mutex = xSemaphoreCreateMutex();
+    if (!_mutex) { ESP_LOGE(TAG, "Mutex create failed"); return ESP_ERR_NO_MEM; }
+
+    adc_oneshot_unit_init_cfg_t unitCfg = {};
+    unitCfg.unit_id = ADC_UNIT_1;
+    esp_err_t ret = adc_oneshot_new_unit(&unitCfg, &_adcHandle);
+    if (ret != ESP_OK) { ESP_LOGE(TAG, "ADC unit init failed"); return ret; }
 
     adc_oneshot_chan_cfg_t chanCfg = {};
     chanCfg.atten    = ADC_ATTEN_DB_12;
     chanCfg.bitwidth = ADC_BITWIDTH_DEFAULT;
-
     ret = adc_oneshot_config_channel(_adcHandle, _adcChannel, &chanCfg);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "ADC channel config failed: %d", ret);
-        return ret;
-    }
+    if (ret != ESP_OK) { ESP_LOGE(TAG, "ADC channel config failed"); return ret; }
 
-    memset(_filterBuf, 0, sizeof(_filterBuf));
+    /* 清空滤波缓冲区 */
     _filterIdx = 0;
     _filterFilled = false;
+    for (int i = 0; i < MA_WINDOW; i++) _filterBuf[i] = 0.0f;
+    _inDeadZone = false;
 
-    // 先设默认值, 再尝试从 NVS 加载
-    _calMultiplier = ADC_CAL_MULTIPLIER;
-    _calOffset = ADC_CAL_OFFSET;
+    /* 加载零点偏移 */
+    _zeroOffset = 0;
     loadCalFromNVS();
 
-    ESP_LOGI(TAG, "ADC initialized (GPIO0, ADC1_CH0, 12-bit, 0~3.3V)");
-    ESP_LOGI(TAG, "Divider ratio=%.3f, cal: mult=%.4f offset=%.4f",
-             ADC_DIVIDER_RATIO, _calMultiplier, _calOffset);
-    return ESP_OK;
-}
+    /* 预填充移动平均窗口 */
+    for (int i = 0; i < MA_WINDOW; i++) {
+        int raw = 0;
+        if (adc_oneshot_read(_adcHandle, _adcChannel, &raw) == ESP_OK) {
+            _movingAverageFilter((float)raw);
+        }
+        esp_rom_delay_us(100);
+    }
 
-void ADCSampler::calibrate(float multiplier, float offset)
-{
-    _calMultiplier = multiplier;
-    _calOffset = offset;
-    saveCalToNVS();
-    ESP_LOGI(TAG, "Calibration updated: mult=%.4f offset=%.4f", multiplier, offset);
+    _initialized = true;
+    ESP_LOGI(TAG, "ADC initialized (4xOS+%d-MA+6pt, mutex=portMAX)", MA_WINDOW);
+    return ESP_OK;
 }
 
 void ADCSampler::zeroCalibrate()
 {
-    /* 采样 20 次取平均，记录底噪偏移 */
-    int sum = 0;
+    int sum = 0, valid = 0;
     for (int i = 0; i < 20; i++) {
         int raw = 0;
-        adc_oneshot_read(_adcHandle, _adcChannel, &raw);
-        sum += raw;
+        if (adc_oneshot_read(_adcHandle, _adcChannel, &raw) == ESP_OK) {
+            sum += raw; valid++;
+        }
         esp_rom_delay_us(1000);
     }
-    _zeroOffset = sum / 20;
+    int offset = (valid > 0) ? (sum / valid) : 0;
+
+    if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) {
+        _zeroOffset = offset;
+        xSemaphoreGive(_mutex);
+    }
     saveCalToNVS();
-    ESP_LOGI(TAG, "ADC zero calibrated: offset=%d (raw avg=%d)", _zeroOffset, _zeroOffset);
+    ESP_LOGI(TAG, "ADC zero calibrated: offset=%d (valid=%d/20)", offset, valid);
 }
 
-/* ========== 采样 ========== */
+/* ========== 采样核心（整流程持锁） ========== */
 
 float ADCSampler::sample()
 {
-    int rawAdc = 0;
+    if (!_initialized) return 0.0f;
 
-    esp_err_t ret = adc_oneshot_read(_adcHandle, _adcChannel, &rawAdc);
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "ADC read failed: %d", ret);
+    if (xSemaphoreTake(_mutex, portMAX_DELAY) != pdTRUE) {
         return _calibratedVoltage;
     }
 
-    _rawAdcValue = rawAdc;
+    /* ① 4x 过采样取平均 */
+    int sum = 0, valid = 0;
+    for (int i = 0; i < 4; i++) {
+        int raw = 0;
+        if (adc_oneshot_read(_adcHandle, _adcChannel, &raw) == ESP_OK) {
+            sum += raw; valid++;
+        }
+        esp_rom_delay_us(50);
+    }
+    if (valid == 0) {
+        float v = _calibratedVoltage;
+        xSemaphoreGive(_mutex);
+        return v;
+    }
+    int rawAdc = sum / valid;
 
-    /* 减去 ADC 零点偏移（硬钳位：≥ 0） */
-    int correctedAdc = rawAdc - _zeroOffset;
-    if (correctedAdc < 0) correctedAdc = 0;
+    /* ② 3点移动平均平滑 */
+    float smoothedAdc = _movingAverageFilter((float)rawAdc);
 
-    // 原始电压: ADC → MCU 电压 → 实际电压 (分压还原)
-    float adcVoltage = ((float)correctedAdc / 4095.0f) * MCU_VDD;
-    float realVoltage = adcVoltage * ADC_DIVIDER_RATIO;
+    /* ③ 6点插值校准（直接输入原始ADC值） */
+    float calV = calculate_calibrated_value(smoothedAdc, true);
 
-    // 移动平均滤波
-    _filteredVoltage = _movingAverageFilter(realVoltage);
-
-    // 校准: V_cal = V_raw * mult + offset
-    _calibratedVoltage = _filteredVoltage * _calMultiplier + _calOffset;
-
-    // 死区阈值: < 0.05V 时强制归零, 消除 ADC 底噪
-    if (_calibratedVoltage < 0.05f) {
-        _calibratedVoltage = 0.0f;
+    /* ④ 带迟滞的死区处理（同步 EMA 状态） */
+    if (_inDeadZone) {
+        if (calV >= DEADZONE_EXIT) {
+            _inDeadZone = false;
+            _emaCalVoltage = calV;   /* 立即恢复，无延迟 */
+        } else {
+            calV = 0.0f;
+            _emaCalVoltage = 0.0f;   /* 保持归零 */
+        }
+    } else {
+        if (calV < DEADZONE_ENTER) {
+            _inDeadZone = true;
+            calV = 0.0f;
+            _emaCalVoltage = 0.0f;
+        }
     }
 
-    return _calibratedVoltage;
+    /* ⑤ EMA 平滑校准电压，消除末位跳动 */
+    if (!_inDeadZone && calV > 0.0f) {
+        if (!_emaInited) {
+            _emaCalVoltage = calV;
+            _emaInited = true;
+        } else {
+            _emaCalVoltage = EMA_ALPHA * calV + (1.0f - EMA_ALPHA) * _emaCalVoltage;
+        }
+    }
+    _calibratedVoltage = _emaCalVoltage;
+
+    /* ⑥ 更新其余共享变量 */
+    _rawAdcValue = rawAdc;
+    _linearVoltage = (smoothedAdc / 4095.0f) * MCU_VDD * ADC_DIVIDER_RATIO;
+
+    xSemaphoreGive(_mutex);
+    return calV;
 }
 
-/* ========== 移动平均滤波 ========== */
+/* ========== getter（全部持锁） ========== */
+
+float ADCSampler::getVoltage()
+{
+    float v = 0.0f;
+    if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) {
+        v = _calibratedVoltage;
+        xSemaphoreGive(_mutex);
+    }
+    return v;
+}
+
+float ADCSampler::getRawVoltage()
+{
+    float v = 0.0f;
+    if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) {
+        v = _linearVoltage;
+        xSemaphoreGive(_mutex);
+    }
+    return v;
+}
+
+int ADCSampler::getRawAdc()
+{
+    int v = 0;
+    if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) {
+        v = _rawAdcValue;
+        xSemaphoreGive(_mutex);
+    }
+    return v;
+}
+
+int ADCSampler::getZeroOffset()
+{
+    int v = 0;
+    if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) {
+        v = _zeroOffset;
+        xSemaphoreGive(_mutex);
+    }
+    return v;
+}
+
+/* ========== 3点移动平均滤波（仅在持锁状态下调用） ========== */
 
 float ADCSampler::_movingAverageFilter(float newValue)
 {
     _filterBuf[_filterIdx] = newValue;
-    _filterIdx = (_filterIdx + 1) % ADC_SAMPLE_COUNT;
+    _filterIdx = (_filterIdx + 1) % MA_WINDOW;
+    if (_filterIdx == 0) _filterFilled = true;
 
-    if (_filterIdx == 0) {
-        _filterFilled = true;
-    }
-
-    int count = _filterFilled ? ADC_SAMPLE_COUNT : _filterIdx;
+    int count = _filterFilled ? MA_WINDOW : _filterIdx;
     if (count == 0) count = 1;
 
-    float sum = 0.0f;
-    for (int i = 0; i < count; i++) {
-        sum += _filterBuf[i];
-    }
-
-    return sum / (float)count;
+    float s = 0.0f;
+    for (int i = 0; i < count; i++) s += _filterBuf[i];
+    return s / (float)count;
 }

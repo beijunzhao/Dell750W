@@ -13,6 +13,7 @@
 #include "host/ble_hs.h"
 #include "host/ble_gap.h"
 #include "host/ble_gatt.h"
+#include "host/ble_att.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 #include <cstring>
@@ -193,12 +194,10 @@ esp_err_t ble_server_send(const char* data)
 
     size_t total_len = strlen(data);
 
-    // MTU=23 时有效载荷仅 20 字节
-    // 如果数据超过 20 字节, NimBLE 的 ble_gattc_notify_custom 会自动分片
-    // 但某些 Android 设备可能无法正确处理自动分片
-    // 因此我们手动分包: 每包不超过 19 字节, 最后一包末尾加 '\n'
-    // App 端的粘包处理逻辑 (按 '\n' 分割) 会重组完整 JSON
-    const size_t CHUNK_SIZE = 19; // 留 1 字节给 '\n'
+    // 动态获取当前 MTU，计算分包大小
+    // 典型 MTU: Android 默认 23 ~ 512，iOS 默认 23 ~ 185
+    uint16_t mtu = ble_att_mtu(g_conn_handle);
+    const size_t CHUNK_SIZE = (mtu > 4) ? (size_t)(mtu - 4) : 19; // 预留 3 字节协议头 + 1 字节 '\n'
 
     esp_err_t result = ESP_OK;
 
@@ -262,7 +261,7 @@ esp_err_t ble_server_send(const char* data)
             offset += chunk_size;
             chunk_num++;
 
-            vTaskDelay(pdMS_TO_TICKS(50));
+            vTaskDelay(pdMS_TO_TICKS(5));
         }
 
         ESP_LOGD(TAG, "BLE TX complete: %d chunks, %zu total bytes", chunk_num, total_len);

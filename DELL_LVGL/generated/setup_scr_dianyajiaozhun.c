@@ -478,7 +478,7 @@ void setup_scr_dianyajiaozhun(lv_ui *ui)
     ui->dianyajiaozhun_label_22 = lv_label_create(ui->dianyajiaozhun);
     lv_obj_set_pos(ui->dianyajiaozhun_label_22, 64, 211);
     lv_obj_set_size(ui->dianyajiaozhun_label_22, 34, 21);
-    lv_label_set_text(ui->dianyajiaozhun_label_22, "1.0V");
+    lv_label_set_text(ui->dianyajiaozhun_label_22, "3.0V");
     lv_label_set_long_mode(ui->dianyajiaozhun_label_22, LV_LABEL_LONG_WRAP);
 
     //Write style for dianyajiaozhun_label_22, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -501,7 +501,7 @@ void setup_scr_dianyajiaozhun(lv_ui *ui)
     ui->dianyajiaozhun_label_23 = lv_label_create(ui->dianyajiaozhun);
     lv_obj_set_pos(ui->dianyajiaozhun_label_23, 102, 211);
     lv_obj_set_size(ui->dianyajiaozhun_label_23, 34, 21);
-    lv_label_set_text(ui->dianyajiaozhun_label_23, "2.5V");
+    lv_label_set_text(ui->dianyajiaozhun_label_23, "5.0V");
     lv_label_set_long_mode(ui->dianyajiaozhun_label_23, LV_LABEL_LONG_WRAP);
 
     //Write style for dianyajiaozhun_label_23, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.
@@ -524,7 +524,7 @@ void setup_scr_dianyajiaozhun(lv_ui *ui)
     ui->dianyajiaozhun_label_24 = lv_label_create(ui->dianyajiaozhun);
     lv_obj_set_pos(ui->dianyajiaozhun_label_24, 147, 211);
     lv_obj_set_size(ui->dianyajiaozhun_label_24, 34, 21);
-    lv_label_set_text(ui->dianyajiaozhun_label_24, "5.0V");
+    lv_label_set_text(ui->dianyajiaozhun_label_24, "8.0V");
     lv_label_set_long_mode(ui->dianyajiaozhun_label_24, LV_LABEL_LONG_WRAP);
 
     //Write style for dianyajiaozhun_label_24, Part: LV_PART_MAIN, State: LV_STATE_DEFAULT.

@@ -34,17 +34,17 @@
 // ---------- PWM 硬件参数 ----------
 #define MCU_VDD         3.3f          // 单片机逻辑电压
 #define V_DAC_MAX       3.0f          // DAC 控制电压上限
-#define PWM_FREQ_HZ     20000         // PWM 频率 20kHz
-#define PWM_RES_BITS    11            // PWM 分辨率 11-bit (ESP32-C3: 80MHz APB_CLK, 11bit+20kHz 可满足)
-#define PWM_MAX_DUTY    2047          // 2^11 - 1 = 2047
-#define PWM_DUTY_3V0    1861          // (3.0/3.3)*2047 ≈ 1861 (约90.9%占空比)
+#define PWM_FREQ_HZ     15000         // PWM 频率 15kHz (12bit需降到≤19531)
+#define PWM_RES_BITS    12            // PWM 分辨率 12-bit
+#define PWM_MAX_DUTY    4095          // 2^12 - 1 = 4095
+#define PWM_DUTY_3V0    3723          // (3.0/3.3)*4095 ≈ 3723
 
 // ---------- 电源参数 ----------
 #define PSU_VOLTAGE_MAX       50.0f   // 电源最高输出电压 (硬件上限)
 #define PSU_CURRENT_MAX       100.0f  // 电源最高输出电流 (硬件上限)
 #define PSU_VOLTAGE_MAX_DEF   12.0f   // 默认量程上限 (可被 set_range 动态修改)
 #define PSU_CURRENT_MAX_DEF   62.5f   // 默认量程上限 (可被 set_range 动态修改)
-#define ADC_DIVIDER_RATIO 5.014f      // 分压比: (470+10k+10k+5.1k)/5.1k = 25570/5100
+#define ADC_DIVIDER_RATIO 12.372f     // 分压比: (470+10k+10k+1.8k)/1.8k = 22270/1800
 #define ADC_CAL_MULTIPLIER 1.000f     // ADC 校准乘数 (默认 1.0, 通过实测修正)
 #define ADC_CAL_OFFSET     0.000f     // ADC 校准偏置 (默认 0.0V)
 #define ADC_SAMPLE_COUNT  10          // 移动平均滤波采样数

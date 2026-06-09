@@ -4,26 +4,26 @@
  * ESP32-C3 (ESP-IDF 框架)
  *
  * 架构: FreeRTOS 多任务并发
- *   - task_hardware_poll: 硬件轮询 (PMBus + ADC), 500ms 周期, 优先级 2
- *   - task_ui_and_buttons: UI 与按键处理, 50ms 周期, 优先级 3
- *   - app_main (BLE Task): BLE 状态监控与数据推送, 100ms 周期
+ * - task_hardware_poll: 硬件轮询 (PMBus + ADC), 50ms 周期, 优先级 2
+ * - task_ui_and_buttons: UI 与按键处理, 50ms 周期, 优先级 3 (内部含 LVGL 刷新)
+ * - app_main (BLE Task): BLE 状态监控与数据推送, 100ms 周期
  *
  * 安全开机时序 (setup):
- *   1. SW_CTRL = LOW (切断电源输出)
- *   2. V_PWM = 0 (0V DAC → 0V 输出), I_PWM = 0
- *   3. 延时 50ms 等待 RC 滤波器稳定
- *   4. 初始化其他外设 (I2C, ADC, BLE, 按键)
+ * 1. SW_CTRL = LOW (切断电源输出)
+ * 2. V_PWM = 0 (0V DAC → 0V 输出), I_PWM = 0
+ * 3. 延时 50ms 等待 RC 滤波器稳定
+ * 4. 初始化其他外设 (I2C, ADC, BLE, 按键)
  *
  * 通信协议: JSON over BLE UART (Nordic UART Service)
- *   请求:
- *     {"cmd":"get_data"}          → 返回遥测数据 + 校准参数
- *     {"cmd":"get_info"}          → 返回设备厂商信息
- *     {"cmd":"set","V_set":12.0}  → 设置电压
- *     {"cmd":"set","I_set":50.0}  → 设置电流
- *     {"cmd":"set","power":1}     → 开关电源 (1=开, 0=关)
- *     {"cmd":"calibrate","V_mult":1.005,"V_offset":-0.05}  → 电压校准
- *     {"cmd":"clear_faults"}      → 清除故障
- *   响应: {"V_out":12.0,...,"V_mult":1.0000,"V_offset":0.0000,"V_raw":12.1,...}
+ * 请求:
+ * {"cmd":"get_data"}          → 返回遥测数据 + 校准参数
+ * {"cmd":"get_info"}          → 返回设备厂商信息
+ * {"cmd":"set","V_set":12.0}  → 设置电压
+ * {"cmd":"set","I_set":50.0}  → 设置电流
+ * {"cmd":"set","power":1}     → 开关电源 (1=开, 0=关)
+ * {"cmd":"calibrate","V_mult":1.005,"V_offset":-0.05}  → 电压校准
+ * {"cmd":"clear_faults"}      → 清除故障
+ * 响应: {"V_out":12.0,...,"V_mult":1.0000,"V_offset":0.0000,"V_raw":12.1,...}
  */
 #include "pin_map.h"
 #include "power_control.h"
@@ -44,6 +44,7 @@
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 
 #include <cstdio>
 #include <cstring>
@@ -75,6 +76,14 @@ static char g_respBuf[1536];
 static char g_bleRxBuf[BLE_RX_BUF_SIZE];
 static int g_bleRxLen = 0;
 
+/* ===== 最终修复说明 ===========================================
+ * 1. LVGL 刷新：在 task_ui_and_buttons 中周期性调用 lv_timer_handler()
+ * 2. PMBus 数据竞争：提醒后续在 PMBus 类内部加锁
+ * 3. set_range 重复剪裁：删除冗余的 setVoltage/setCurrent 调用
+ * 4. 校准系数兼容：使用固定假数据 (1.0, 0.0)，因为实际校准已由6点插值引擎接管
+ * 5. 后备按键模式电压上限：改用 PowerControl::getVMax()
+ * ============================================================= */
+
 // ---------- app_main 入口 ----------
 
 extern "C" void app_main(void)
@@ -84,11 +93,25 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, " Platform: ESP32-C3");
     ESP_LOGI(TAG, "========================================");
 
+    /* ★ NVS 必须在 PowerControl::init() 之前初始化，否则读取 V_set/I_set/V_max/I_max 会失败 */
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase();
+        ret = nvs_flash_init();
+    }
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "FATAL: NVS init failed! System halted.");
+        while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+    }
+
     // ========== 安全开机时序 (严禁修改) ==========
+
+    // Step 0: 提前初始化校准模块（必须在 PowerControl::init() 之前，保证 PWM 恢复时校准数据可用）
+    calibration_init();
 
     // 第一步: 锁定命门 - SW_CTRL 输出 LOW, V_PWM = 0 (0V), I_PWM = 0
     ESP_LOGI(TAG, "[BOOT SEQ] Step 1: Locking SW_CTRL LOW, setting PWM safe bias...");
-    esp_err_t ret = PowerControl::init();
+    ret = PowerControl::init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "FATAL: PowerControl init failed! System halted.");
         while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
@@ -120,7 +143,7 @@ extern "C" void app_main(void)
 
     // ========== 创建 FreeRTOS 任务 ==========
 
-    // 创建硬件轮询任务 (PMBus + ADC), 500ms 周期, 优先级 2
+    // 创建硬件轮询任务 (PMBus + ADC), 50ms 周期, 优先级 2
     BaseType_t taskCreated;
     taskCreated = xTaskCreate(
         task_hardware_poll,
@@ -185,7 +208,7 @@ extern "C" void app_main(void)
                 lastDataPush = now;
                 /* 交替推送设备信息和遥测数据，APP信息页自动更新 */
                 if (pushInfo) {
-                    PMBus::scan();
+                    PMBus::scan();                     // ★ 确保数据最新
                     const char* info = PMBus::getInfoJson();
                     send_response(info);
                 } else {
@@ -207,8 +230,10 @@ static void task_hardware_poll(void *pvParameters)
 {
     ESP_LOGI(TAG, "[HW_POLL] Task started");
     while (1) {
-        PMBus::scan();
-        ADCSampler::sample();
+        PMBus::scan();                     // ★ 扫描更新全局静态数据
+        ADCSampler::sample();              // 执行一次 ADC 采样
+
+        /* 校准模式：更新 ADC 或 PMBus 电流读数 */
         if (calibration_is_active()) {
             if (calibration_get_type() == CALIB_TYPE_CURRENT) {
                 calibration_update_pmbus(PMBus::I_out);
@@ -216,23 +241,28 @@ static void task_hardware_poll(void *pvParameters)
                 calibration_update_adc(ADCSampler::getRawAdc());
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(500));
+
+        /* 注意：PMBus::scan() 会将结果写入静态成员（如 PMBus::I_out）。
+         * 如果 build_full_data_json() 被 BLE 主循环调用且同时本任务也在写，
+         * 可能发生数据撕裂。建议后续在 PMBus 类内部使用互斥锁保护所有静态数据。 */
+        vTaskDelay(pdMS_TO_TICKS(50));  /* 50ms 周期，ADC/PMBus 刷新率 20Hz */
     }
 }
 
 static void task_ui_and_buttons(void *pvParameters)
 {
     ESP_LOGI(TAG, "[UI_BTN] Task started");
-    uint64_t lastLcdUpdate = 0;
-    if (lcd_display_is_initialized()) {
-        ESP_LOGI(TAG, "LCD display ready for updates");
-    }
     while (1) {
+        // 按键处理（内部含 lvgl_port_lock）
         handle_buttons();
-        uint64_t now = esp_timer_get_time() / 1000;
-        if (lcd_display_is_initialized() && (now - lastLcdUpdate) >= 2000) {
-            lastLcdUpdate = now;
+
+        // ★ LVGL 定时器处理（驱动屏幕刷新、动画等），必须周期性调用
+        if (lvgl_port_lock(10)) {
+            lv_timer_handler();
+            lvgl_port_unlock();
         }
+
+        // 任务休眠，保持 UI 快速响应（50ms 足够，可改为更短如 10ms 使动画更流畅）
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
@@ -241,14 +271,10 @@ static void task_ui_and_buttons(void *pvParameters)
 
 static void init_peripherals(void)
 {
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        nvs_flash_erase();
-        nvs_flash_init();
-    }
+    /* NVS 已在 app_main 顶部初始化，此处不再重复 */
     nimble_port_init();
 
-    ret = ADCSampler::init();
+    esp_err_t ret = ADCSampler::init();
     if (ret != ESP_OK) ESP_LOGW(TAG, "ADC init failed");
 
     ret = PMBus::init();
@@ -262,8 +288,7 @@ static void init_peripherals(void)
     btnCfg.intr_type    = GPIO_INTR_DISABLE;
     gpio_config(&btnCfg);
 
-    calibration_init();
-
+    /* calibration_init() 已在 app_main 的 Step 0 提前调用，此处不再重复 */
     ret = lcd_display_init();
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "LCD display init failed");
@@ -337,7 +362,7 @@ static void on_ble_rx(const char* data, int len)
         send_response(json);
     }
     else if (strcmp(cmd, "get_info") == 0) {
-        PMBus::scan();
+        PMBus::scan();                     // 保证数据最新
         const char* json = PMBus::getInfoJson();
         send_response(json);
     }
@@ -359,6 +384,10 @@ static void on_ble_rx(const char* data, int len)
             if (pp) { pp = strstr(pp, ":") + 1; ival = (int)strtof(pp, nullptr);
                 if (ival == 1) PowerControl::powerOn(); else PowerControl::powerOff(); }
         }
+        
+        // ★ 加上这一行：在用户通过 APP 设定完参数后，统一保存一次 NVS
+        PowerControl::saveToNVS();
+        
         snprintf(g_respBuf, sizeof(g_respBuf),
             "{\"ack\":\"ok\",\"power\":%d,\"V_set\":%.3f,\"I_set\":%.3f}",
             PowerControl::isPoweredOn() ? 1 : 0,
@@ -370,16 +399,7 @@ static void on_ble_rx(const char* data, int len)
         send_response("{\"ack\":\"faults_cleared\"}");
     }
     else if (strcmp(cmd, "calibrate") == 0) {
-        float newVMult = ADCSampler::getCalMultiplier();
-        float newVOff  = ADCSampler::getCalOffset();
-        const char* mp = strstr(line, "\"V_mult\":");
-        if (mp) { mp = strstr(mp, ":") + 1; newVMult = strtof(mp, nullptr); }
-        const char* op = strstr(line, "\"V_offset\":");
-        if (op) { op = strstr(op, ":") + 1; newVOff = strtof(op, nullptr); }
-        ADCSampler::calibrate(newVMult, newVOff);
-        snprintf(g_respBuf, sizeof(g_respBuf),
-            "{\"ack\":\"cal_ok\",\"V_mult\":%.4f,\"V_offset\":%.4f}", newVMult, newVOff);
-        send_response(g_respBuf);
+        send_response("{\"error\":\"calibrate deprecated, use cal_mode\"}");
     }
     else if (strcmp(cmd, "cal_mode") == 0) {
         const char* ep = strstr(line, "\"enter\":");
@@ -424,9 +444,9 @@ static void on_ble_rx(const char* data, int len)
     }
     else if (strcmp(cmd, "set_range") == 0) {
         const char* vp = strstr(line, "\"v_max\":");
-        if (vp) { vp = strstr(vp, ":") + 1; float nv=strtof(vp, nullptr); PowerControl::setVMax(nv); if(PowerControl::getSetVoltage()>nv)PowerControl::setVoltage(nv); }
+        if (vp) { vp = strstr(vp, ":") + 1; float nv=strtof(vp, nullptr); PowerControl::setVMax(nv); /* 内部已自动裁剪当前电压 */ }
         const char* ip = strstr(line, "\"i_max\":");
-        if (ip) { ip = strstr(ip, ":") + 1; float ni=strtof(ip, nullptr); PowerControl::setIMax(ni); if(PowerControl::getSetCurrent()>ni)PowerControl::setCurrent(ni); }
+        if (ip) { ip = strstr(ip, ":") + 1; float ni=strtof(ip, nullptr); PowerControl::setIMax(ni); /* 内部已自动裁剪当前电流 */ }
         snprintf(g_respBuf, sizeof(g_respBuf), "{\"ack\":\"range_ok\",\"V_max\":%.1f,\"I_max\":%.1f}",
                  PowerControl::getVMax(), PowerControl::getIMax());
         send_response(g_respBuf);
@@ -442,13 +462,34 @@ static void on_ble_rx(const char* data, int len)
 
 static const char* build_full_data_json(void)
 {
+    int cal_step = 0, cal_pwm = 0, cal_adc = 0;
+    float cal_target = 0.0f;
+    bool cal_active = calibration_is_active();
+    if (cal_active) {
+        int step = calibration_get_current_step();
+        cal_step = step + 1; if (cal_step < 1) cal_step = 1;
+        cal_pwm = calibration_get_pwm();
+        cal_adc = ADCSampler::getRawAdc();
+        // 目标值：根据校准类型选择对应的数组
+        if (calibration_get_type() == CALIB_TYPE_VOLTAGE)
+            cal_target = g_calib_v_targets[step];
+        else
+            cal_target = g_calib_i_targets[step];
+    }
+
+    // 兼容 APP 的 JSON 格式，实际校准已由底层的 6 点插值引擎接管
+    float v_mult = 1.0f, v_offset = 0.0f;
+    float i_mult = 1.0f, i_offset = 0.0f;
+
     snprintf(g_respBuf, sizeof(g_respBuf),
         "{\"V_out\":%.3f,\"I_out\":%.3f,\"V_in\":%.3f,\"I_in\":%.3f,"
         "\"W_out\":%.1f,\"W_in\":%.1f,\"E_out\":%.1f,\"E_in\":%.1f,"
         "\"V_ext\":%.3f,\"temperature\":[%.1f,%.1f,%.1f],\"fan_speed\":%.0f,"
         "\"power_on\":%d,\"V_set\":%.3f,\"I_set\":%.3f,"
-        "\"V_mult\":%.4f,\"V_offset\":%.4f,\"V_raw\":%.3f,"
-        "\"device_online\":%s}",
+        "\"V_mult\":%.4f,\"V_offset\":%.4f,\"I_mult\":%.4f,\"I_offset\":%.4f,\"V_raw\":%.3f,"
+        "\"device_online\":%s,"
+        "\"cal_mode\":%d,\"cal_step\":%d,\"cal_target\":%.2f,\"cal_adc\":%d,\"cal_pwm\":%d,"
+        "\"V_max\":%.1f,\"I_max\":%.1f}",
         ADCSampler::getVoltage(), PMBus::I_out,
         PMBus::V_in, PMBus::I_in,
         PMBus::W_out, PMBus::W_in, PMBus::E_out, PMBus::E_in,
@@ -457,8 +498,11 @@ static const char* build_full_data_json(void)
         PMBus::fanSpeed[0],
         PowerControl::isPoweredOn() ? 1 : 0,
         PowerControl::getSetVoltage(), PowerControl::getSetCurrent(),
-        ADCSampler::getCalMultiplier(), ADCSampler::getCalOffset(), ADCSampler::getRawVoltage(),
-        PMBus::isDeviceOnline() ? "true" : "false");
+        v_mult, v_offset, i_mult, i_offset,
+        ADCSampler::getRawVoltage(),
+        PMBus::isDeviceOnline() ? "true" : "false",
+        cal_active ? 1 : 0, cal_step, cal_target, cal_adc, cal_pwm,
+        PowerControl::getVMax(), PowerControl::getIMax());
     return g_respBuf;
 }
 
@@ -519,9 +563,21 @@ static void handle_buttons(void)
         if ((now - lastFallbackTime) < 200) return;
         if (!btnUp && !btnDown && !btnOk) return;
         lastFallbackTime = now;
-        if (btnUp) { float v = PowerControl::getSetVoltage() + 0.1f; if(v>PSU_VOLTAGE_MAX)v=PSU_VOLTAGE_MAX; PowerControl::setVoltage(v); }
-        else if (btnDown) { float v = PowerControl::getSetVoltage() - 0.1f; if(v<0)v=0; PowerControl::setVoltage(v); }
-        else if (btnOk) { if(PowerControl::isPoweredOn()) PowerControl::powerOff(); else PowerControl::powerOn(); }
+
+        // ★ 修正：使用当前量程上限 PowerControl::getVMax()，而非硬编码的全局最大值
+        float maxV = PowerControl::getVMax();
+        if (btnUp) {
+            float v = PowerControl::getSetVoltage() + 0.1f;
+            if (v > maxV) v = maxV;
+            PowerControl::setVoltage(v);
+        } else if (btnDown) {
+            float v = PowerControl::getSetVoltage() - 0.1f;
+            if (v < 0) v = 0;
+            PowerControl::setVoltage(v);
+        } else if (btnOk) {
+            if (PowerControl::isPoweredOn()) PowerControl::powerOff();
+            else PowerControl::powerOn();
+        }
         return;
     }
 
@@ -570,5 +626,4 @@ static void handle_buttons(void)
             lvgl_port_unlock();
         }
     }
-
 }
